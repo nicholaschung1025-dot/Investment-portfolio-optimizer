@@ -1,0 +1,8 @@
+# Pinned dependencies for mean_variance_optimizer (Python 3.14).
+# Versions verified to install and run natively on Windows.
+numpy==2.4.4
+pandas==3.0.2
+scipy==1.17.1
+yfinance==1.3.0
+plotly==6.9.0
+pytest==9.1.1

@@ -1,0 +1,28 @@
+# Local data store (SQLite database file)
+data/*
+!data/.gitkeep
+
+# Generated plots
+outputs/*
+!outputs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# Secrets / environment
+.env
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+desktop.ini
