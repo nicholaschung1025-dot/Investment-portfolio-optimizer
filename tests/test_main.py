@@ -514,6 +514,55 @@ def test_a_fixed_holding_outside_the_universe_is_refused(tmp_path) -> None:
         )
 
 
+def test_a_minimum_weight_makes_the_stock_a_mandatory_holding(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        max_k=2,
+        min_weights={"BBB": 0.3},
+    )
+
+    assert result.selection is not None
+    assert "BBB" in result.selection.tickers
+    assert result.headline.weights["BBB"] >= 0.3 - 1e-6
+
+
+def test_a_minimum_weight_stock_rejected_by_the_quality_filters_is_refused(tmp_path) -> None:
+    def small_company(ticker: str) -> dict:
+        payload = _fundamentals_payload(ticker)
+        if ticker == "BBB":
+            payload["marketCap"] = 1_000_000_000.0
+        return payload
+
+    with pytest.raises(ConstraintError):
+        run_analysis(
+            tickers=["AAA", "BBB", "CCC"],
+            start="2021-01-01",
+            end="2022-06-01",
+            objective="max_sharpe",
+            risk_free_rate=0.04,
+            db_path=tmp_path / "portfolio_history.db",
+            output_dir=tmp_path / "outputs",
+            downloader=_fake_downloader,
+            n_portfolios=200,
+            seed=1,
+            fundamentals_fetcher=small_company,
+            fundamentals_cache=tmp_path / "fundamentals.json",
+            quality_filters=True,
+            min_weights={"BBB": 0.2},
+        )
+
+
 def test_the_parser_accepts_the_selection_flags() -> None:
     args = build_parser().parse_args(["--fixed", "AAA", "--fixed", "BBB", "--max-k", "4"])
 

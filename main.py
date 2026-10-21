@@ -433,9 +433,16 @@ def run_analysis(
     )
     expected_returns, covariance = estimator(log_returns)
 
+    user_min_weights = dict(min_weights or {})
+    # A stock you set a minimum for has to be held: you cannot own a floor on
+    # something you do not own. Without this the floor would disappear
+    # whenever the selection picked a different subset.
     fixed = list(dict.fromkeys(fixed_tickers or []))
-    effective_min_weights = dict(min_weights or {})
-    for ticker in fixed:
+    for ticker in user_min_weights:
+        if ticker not in fixed:
+            fixed.append(ticker)
+    effective_min_weights = dict(user_min_weights)
+    for ticker in fixed_tickers or []:
         effective_min_weights.setdefault(ticker, DEFAULT_FIXED_WEIGHT)
     constraints = WeightConstraints(
         min_weights=effective_min_weights,
@@ -1040,11 +1047,13 @@ def _print_report(
 
     if result.selection is not None:
         selection = result.selection
+        floors = result.constraints.min_weights if result.constraints else {}
+        holdings = ", ".join(
+            f"{ticker} (min {floors.get(ticker, 0.0):.0%})"
+            for ticker in selection.fixed_tickers
+        )
         print("\nSelection")
-        if selection.fixed_tickers:
-            print(f"  Mandatory holdings : {', '.join(selection.fixed_tickers)}")
-        else:
-            print("  Mandatory holdings : none")
+        print(f"  Mandatory holdings : {holdings or 'none'}")
         print(f"  Chosen             : {', '.join(selection.tickers)}")
         for step in selection.steps:
             print(

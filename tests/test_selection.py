@@ -142,6 +142,19 @@ def test_more_fixed_holdings_than_max_k_is_refused() -> None:
         )
 
 
+def test_mandatory_holdings_that_already_fill_the_portfolio_are_kept() -> None:
+    expected_returns, covariance = _inputs()
+    constraints = WeightConstraints(min_weights={"FIXED": 0.3, "AAA": 0.2})
+
+    result = select_portfolio(
+        expected_returns, covariance, ["FIXED", "AAA"], max_k=2, constraints=constraints
+    )
+
+    assert result.tickers == ["FIXED", "AAA"]
+    assert result.weights["FIXED"] >= 0.3 - 1e-6
+    assert result.weights["AAA"] >= 0.2 - 1e-6
+
+
 def test_a_maximum_weight_that_needs_more_slots_still_selects() -> None:
     expected_returns, covariance = _inputs()
 

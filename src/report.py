@@ -122,6 +122,7 @@ td.neg { color: var(--negative); }
   margin-bottom: 10px; font-size: 14px; color: var(--muted);
 }
 .callout strong { color: var(--text); }
+.note { color: var(--muted); font-size: 13px; margin: 4px 2px 12px; }
 footer {
   margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--border);
   color: var(--muted); font-size: 12.5px;
@@ -431,8 +432,16 @@ def render_report(result: "AnalysisResult", title: str = "Portfolio Report") -> 
             + "</div>"
         )
 
+    floors = result.constraints.min_weights if result.constraints else {}
+    mandatory = ", ".join(
+        f"{ticker} (min {floors.get(ticker, 0.0):.0%})"
+        for ticker in (result.selection.fixed_tickers if result.selection else [])
+    )
+    note = f'<p class="note">Mandatory holdings: {mandatory}</p>' if mandatory else ""
+
     sections.append(
         "<h2>Target weights</h2><div class=\"panel\">"
+        + note
         + _weights_table(headline.weights, cash_weight)
         + "</div>"
     )

@@ -218,6 +218,10 @@ Force a core holding into the portfolio and cap single-asset concentration:
 .\.venv\Scripts\python.exe main.py --min-weight AAPL=0.25 --min-weight MSFT=0.15 --max-weight 0.30
 ```
 
+A minimum weight implies a holding: the stock is always in the portfolio,
+because you cannot own a floor on something you do not own. `--fixed` says
+the same thing without naming a weight, and gives the position a 5% floor.
+
 Choose which assets to hold, with a mandatory holding that is always in:
 
 ```powershell
@@ -267,8 +271,8 @@ Or just run it with no arguments for a sensible default universe:
 | `--refresh-fundamentals` | off | Ignore the fundamentals cache and fetch again |
 | `--market-meta` | – | CSV overriding the built-in market metadata |
 | `--usd-hkd` | `7.82` | Hong Kong dollars per US dollar |
-| `--min-weight` | – | Minimum weight per ticker, e.g. `AAPL=0.25`; repeatable |
-| `--fixed` | – | A holding that must be in the portfolio; repeatable |
+| `--min-weight` | – | Minimum weight per ticker, e.g. `AAPL=0.25`; repeatable. A ticker with a minimum is always held |
+| `--fixed` | – | A holding that must be in the portfolio; repeatable. Gets a 5% floor |
 | `--max-k` | `0` | Maximum number of assets to hold; 0 keeps the whole universe |
 | `--selection-beam` | `5` | Partial selections the search keeps per step |
 | `--quality-filters` | off | Exclude companies that fail the quality rules |

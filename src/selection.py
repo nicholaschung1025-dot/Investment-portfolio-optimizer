@@ -184,6 +184,23 @@ def select_portfolio(
                 f"maximum weight"
             )
 
+    if len(fixed) == keep:
+        # The mandatory holdings already fill the portfolio, so there is
+        # nothing to search for.
+        result = _optimize_subset(
+            expected_returns, covariance, fixed, objective, risk_free_rate, effective
+        )
+        return SelectionResult(
+            tickers=list(fixed),
+            weights=result.weights,
+            fixed_tickers=fixed,
+            selected_tickers=[],
+            sharpe_ratio=result.sharpe_ratio,
+            expected_return=result.expected_return,
+            volatility=result.volatility,
+            constraints=_subset_constraints(list(fixed), effective),
+        )
+
     if keep == len(universe):
         result = _optimize_subset(
             expected_returns, covariance, universe, objective, risk_free_rate, effective
