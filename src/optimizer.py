@@ -15,15 +15,12 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from src.errors import OptimizationError
 from src.math_engine import portfolio_performance, sharpe_ratio
 
 Objective = Literal["max_sharpe", "min_vol"]
 
 _PSD_TOLERANCE = -1e-8
-
-
-class OptimizationError(RuntimeError):
-    """Raised when portfolio inputs are invalid or the solver fails to converge."""
 
 
 @dataclass(frozen=True)
