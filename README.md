@@ -28,10 +28,14 @@ star) portfolios highlighted.*
   pull the noisy sample covariance towards a scaled identity matrix. This is
   the single biggest defence against the estimation error that makes plain
   mean-variance allocate everything to one asset.
-- **Interchangeable expected-return estimators** — the sample mean of log
-  returns (default) or the capital asset pricing model with betas estimated
-  against a market index. A Black-Litterman posterior is available in the
-  library for when market-capitalization data is at hand.
+- **Interchangeable expected-return estimators** — the default is `auto`, which
+  uses a Black-Litterman posterior when market capitalizations are available
+  and falls back to the sample mean of log returns when they are not. The
+  capital asset pricing model is also available, and a Black-Litterman
+  posterior can be built from absolute analyst views.
+- **Measured, not assumed** — `--compare-estimators` walks every estimator
+  forward out of sample and reports them side by side, so the choice of
+  estimator is an empirical question rather than a matter of taste.
 - **Portfolio constraints** — minimum weights (how a mandatory core holding is
   expressed), a maximum weight per asset, and a maximum portfolio volatility.
   Infeasible requests are refused with a clear message instead of an obscure
@@ -93,6 +97,8 @@ mean_variance_optimizer/
 │   ├── optimizer.py          # scipy SLSQP optimization + Monte Carlo sampler
 │   ├── allocation.py         # Capital allocation line to a target return
 │   ├── validation.py         # Walk-forward backtest vs equal weight
+│   ├── market.py             # Listing currency, board lot, FX, market weights
+│   ├── fundamentals.py       # Company fundamentals with an on-disk cache
 │   ├── database.py           # Local SQLite persistence
 │   └── visualizer.py         # Plotly HTML chart generation
 ├── tests/
@@ -103,6 +109,8 @@ mean_variance_optimizer/
 │   ├── test_constraints.py
 │   ├── test_allocation.py
 │   ├── test_validation.py
+│   ├── test_market.py
+│   ├── test_fundamentals.py
 │   ├── test_data_fetcher.py
 │   ├── test_database.py
 │   ├── test_visualizer.py
@@ -170,9 +178,15 @@ Or just run it with no arguments for a sensible default universe:
 | `--db-path` | `data/portfolio_history.db` | SQLite database path |
 | `--output-dir` | `outputs` | Directory for the HTML chart |
 | `--portfolios` | `5000` | Monte Carlo portfolios to sample |
-| `--expected-return-method` | `historical_mean` | `historical_mean` or `capm` |
+| `--expected-return-method` | `auto` | `auto`, `historical_mean`, `capm` or `black_litterman` |
 | `--covariance-method` | `ledoit-wolf` | `sample`, `ledoit-wolf` or `oas` |
 | `--market-index` | `^GSPC` | Market index used by the CAPM estimator |
+| `--market-risk-premium` | `0.05` | Risk premium scaling the Black-Litterman equilibrium |
+| `--tau` | `0.05` | Uncertainty of the Black-Litterman prior |
+| `--fundamentals-cache` | `data/fundamentals_cache.json` | Where raw fundamentals are cached |
+| `--refresh-fundamentals` | off | Ignore the fundamentals cache and fetch again |
+| `--market-meta` | – | CSV overriding the built-in market metadata |
+| `--usd-hkd` | `7.82` | Hong Kong dollars per US dollar |
 | `--min-weight` | – | Minimum weight per ticker, e.g. `AAPL=0.25`; repeatable |
 | `--max-weight` | – | Maximum weight for any single ticker, e.g. `0.35` |
 | `--max-volatility` | – | Maximum annualized portfolio volatility, e.g. `0.15` |
@@ -180,6 +194,7 @@ Or just run it with no arguments for a sensible default universe:
 | `--validate` | off | Run the out-of-sample walk-forward backtest |
 | `--validate-window` | `252` | Observations required before the first rebalance |
 | `--validate-rebalance` | `monthly` | `monthly` or `quarterly` |
+| `--compare-estimators` | off | Walk-forward every estimator and compare the results |
 
 After a run, double-click the generated
 `outputs/efficient_frontier_YYYYMMDD.html` to explore the frontier in your
@@ -230,6 +245,42 @@ Black-Litterman : prior  pi = r_f + delta x Sigma x w_market
 A view confidence `theta` in `(0, 1)` controls how far the posterior moves
 towards the view: `0.5` splits the difference evenly, `0.95` moves it 95% of
 the way, and `theta -> 0` leaves the prior untouched.
+
+Without views, the Black-Litterman prior already says something useful: the
+expected returns stop being each asset's own noisy history and become the
+market's implied equilibrium, which differ between assets only through their
+covariance with the market portfolio. That is why a Black-Litterman run
+produces a diversified, minimum-volatility-looking portfolio -- the
+differentiation between assets comes from the views.
+
+### Which Estimator Should I Use?
+
+Run the comparison on your own universe and period rather than trusting a
+table from someone else:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --tickers AAPL MSFT GOOGL AMZN --compare-estimators
+```
+
+Three reference runs on this machine, each reported out of sample against an
+equal-weight benchmark over the same periods:
+
+| Universe | Period | `historical_mean` | `capm` | `black_litterman` | Benchmark |
+| --- | --- | --- | --- | --- | --- |
+| 4 mega caps | 2022-2024 | Sharpe 1.27 | Sharpe 2.22 | Sharpe 2.22 | Sharpe 2.26 |
+| 10 large caps | 2015-2024 | Sharpe 1.42, DD -51% | Sharpe 1.10 | Sharpe 1.43 | Sharpe 1.30 |
+| 8 mixed caps | 2010-2024 | Sharpe 0.91 | Sharpe 0.86 | Sharpe 1.08 | Sharpe 1.01 |
+
+The sample mean of history was the weakest of the three and the most
+volatile, and it lost to the benchmark outright in two of the three runs.
+Black-Litterman beat the benchmark in two runs and came close in the third,
+and it never produced the worst drawdown, which is why it is the default.
+CAPM was the least consistent. These are three runs, not a proof -- the
+comparison is the point, not the table.
+
+The Black-Litterman rows use today's market capitalizations for every
+historical period, so their backtest is mildly optimistic. The other two
+rows are not.
 
 ### Covariance Estimation
 
@@ -296,12 +347,13 @@ no test ever downloads data.
 - Expected returns are estimated from historical means, which is a noisy
   estimator; treat the output as an illustration of the method, not investment
   advice.
+- The Black-Litterman market portfolio is the capitalization-weighted
+  candidate universe, not a broad market index, and the backtest uses today's
+  capitalizations for every historical period, so it is mildly optimistic.
+- Fundamentals come from a free, unofficial source and can be wrong. They are
+  cached for 24 hours; pass `--refresh-fundamentals` to fetch them again.
 - Long-only portfolios. Leverage, short selling and derivative overlays are out
   of scope.
-- The Black-Litterman estimator is available in the library
-  (`src.expected_returns.black_litterman_returns`) but is not yet exposed on
-  the command line: it needs market-capitalization weights, which are not
-  fetched yet.
 - The persisted run record does not yet store the cash weight, the estimation
   methods or the validation result.
 - Prices come from a free, unofficial data source and can be wrong.
@@ -315,3 +367,7 @@ no test ever downloads data.
 - The default covariance estimator is `ledoit-wolf`, which changes the
   weights compared with an earlier plain sample-covariance release. Pass
   `--covariance-method sample` to reproduce the old behaviour.
+- The default expected-return estimator is `auto`, which uses Black-Litterman
+  when market capitalizations are available and the historical mean otherwise.
+  The report always names the estimator it actually used, and a fallback
+  prints a warning.
