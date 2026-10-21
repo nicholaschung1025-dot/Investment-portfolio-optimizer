@@ -30,6 +30,11 @@ def _fundamentals_payload(ticker: str) -> dict:
     }
 
 
+def _no_fundamentals(ticker: str) -> dict:
+    """Fundamentals fetcher that reports nothing, so no network is touched."""
+    return {}
+
+
 def _fake_downloader(tickers, start=None, end=None, **kwargs):
     rng = np.random.default_rng(0)
     periods = 300
@@ -55,6 +60,8 @@ def _run(tmp_path, tickers, objective="max_sharpe"):
         downloader=_fake_downloader,
         n_portfolios=500,
         seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
     )
 
 
@@ -130,7 +137,7 @@ def test_cli_end_to_end_exits_zero(tmp_path, capsys) -> None:
 def test_parser_defaults_match_the_documented_estimation_flags() -> None:
     args = build_parser().parse_args([])
 
-    assert args.expected_return_method == "historical_mean"
+    assert args.expected_return_method == "auto"
     assert args.covariance_method == "ledoit-wolf"
     assert args.target_return is None
     assert args.max_weight is None
@@ -170,6 +177,47 @@ def test_run_analysis_reports_the_methods_it_used(tmp_path) -> None:
 
     assert result.covariance_method == "sample"
     assert result.expected_return_method == "historical_mean"
+
+
+def test_auto_uses_black_litterman_when_market_caps_are_available(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        expected_return_method="auto",
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    assert result.expected_return_method == "black_litterman"
+
+
+def test_auto_falls_back_to_the_historical_mean_without_market_caps(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        expected_return_method="auto",
+        fundamentals_fetcher=lambda ticker: {"currentPrice": 100.0},
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    assert result.expected_return_method == "historical_mean"
+    assert any("capitalization" in warning for warning in result.warnings)
 
 
 def test_black_litterman_uses_market_capitalization_weights(tmp_path) -> None:
@@ -288,6 +336,8 @@ def test_min_weight_flag_is_applied(tmp_path) -> None:
         downloader=_fake_downloader,
         n_portfolios=200,
         seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
         min_weights={"BBB": 0.2},
     )
 
@@ -306,6 +356,8 @@ def test_max_weight_flag_is_applied(tmp_path) -> None:
         downloader=_fake_downloader,
         n_portfolios=200,
         seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
         max_weight=0.4,
     )
 
@@ -327,6 +379,8 @@ def test_target_return_holds_part_of_the_portfolio_in_cash(tmp_path) -> None:
         downloader=_fake_downloader,
         n_portfolios=200,
         seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
         target_return=target,
     )
 
@@ -352,8 +406,44 @@ def test_target_above_the_tangency_return_is_refused(tmp_path) -> None:
             downloader=_fake_downloader,
             n_portfolios=200,
             seed=1,
+            fundamentals_fetcher=_no_fundamentals,
+            fundamentals_cache=tmp_path / "fundamentals.json",
             target_return=base.headline.expected_return + 0.05,
         )
+
+
+def test_compare_estimators_prints_a_comparison(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "--tickers",
+            "AAA",
+            "BBB",
+            "CCC",
+            "--start",
+            "2021-01-01",
+            "--end",
+            "2022-06-01",
+            "--db-path",
+            str(tmp_path / "portfolio_history.db"),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+            "--portfolios",
+            "200",
+            "--compare-estimators",
+            "--validate-window",
+            "100",
+            "--fundamentals-cache",
+            str(tmp_path / "fundamentals.json"),
+        ],
+        downloader=_fake_downloader,
+        fundamentals_fetcher=_fundamentals_payload,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "historical_mean" in captured.out
+    assert "black_litterman" in captured.out
+    assert "bench CAGR" in captured.out
 
 
 def test_validation_reports_out_of_sample_metrics(tmp_path) -> None:
@@ -368,6 +458,8 @@ def test_validation_reports_out_of_sample_metrics(tmp_path) -> None:
         downloader=_fake_downloader,
         n_portfolios=200,
         seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
         validate=True,
         validate_window=100,
     )

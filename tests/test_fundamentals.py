@@ -187,6 +187,19 @@ def test_a_missing_cache_file_is_not_an_error(tmp_path) -> None:
     assert cache.is_fresh() is False
 
 
+def test_a_failed_fetch_keeps_the_previous_cache_entries(tmp_path) -> None:
+    path = tmp_path / "fundamentals.json"
+    cache = FundamentalsCache(path)
+    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    path.write_text(
+        json.dumps({"fetched_at": stale, "tickers": {"AAA": _raw()}}), encoding="utf-8"
+    )
+
+    fetch_fundamentals(["AAA"], cache=cache, fetcher=lambda ticker: {})
+
+    assert "AAA" in cache.read()
+
+
 def test_the_cache_is_written_after_a_fetch(tmp_path) -> None:
     path = tmp_path / "fundamentals.json"
     cache = FundamentalsCache(path)

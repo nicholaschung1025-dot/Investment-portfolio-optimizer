@@ -28,7 +28,7 @@ import pandas as pd
 from src.errors import OptimizationError
 from src.math_engine import annualized_expected_returns
 
-ExpectedReturnMethod = Literal["historical_mean", "capm", "black_litterman"]
+ExpectedReturnMethod = Literal["historical_mean", "capm", "black_litterman", "auto"]
 
 
 def historical_mean(

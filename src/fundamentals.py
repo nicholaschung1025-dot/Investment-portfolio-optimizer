@@ -217,10 +217,18 @@ class FundamentalsCache:
 
 
 def _yfinance_fetcher(ticker: str) -> Mapping[str, object]:
-    """Fetch the raw Yahoo Finance payload for one ticker."""
+    """Fetch the raw Yahoo Finance payload for one ticker.
+
+    The delay between calls keeps the request rate inside what Yahoo Finance
+    tolerates; it belongs to the network client, not to the orchestration, so
+    an injected fetcher never waits.
+    """
     import yfinance as yf
 
-    info = yf.Ticker(ticker).info
+    try:
+        info = yf.Ticker(ticker).info
+    finally:
+        time.sleep(_FETCH_DELAY_SECONDS)
     return info if isinstance(info, dict) else {}
 
 
@@ -255,20 +263,22 @@ def fetch_fundamentals(
         }
 
     missing = [ticker for ticker in requested if ticker not in raw_entries]
+    fetched: dict[str, dict] = {}
     for ticker in missing:
         try:
             payload = fetch(ticker)
         except Exception:  # noqa: BLE001 - one bad ticker must not stop the run
             payload = {}
         if payload:
-            raw_entries[ticker] = dict(payload)
-        time.sleep(_FETCH_DELAY_SECONDS)
+            fetched[ticker] = dict(payload)
 
-    if cache is not None and missing:
-        cache.write(raw_entries)
+    if cache is not None and fetched:
+        # A failed fetch must not erase what the cache already knows.
+        cache.write({**raw_entries, **fetched})
 
+    entries = {**raw_entries, **fetched}
     return {
-        ticker: normalize_fundamentals(ticker, raw_entries.get(ticker, {}))
+        ticker: normalize_fundamentals(ticker, entries.get(ticker, {}))
         for ticker in requested
     }
 

@@ -50,7 +50,7 @@ from src.optimizer import (
     monte_carlo_frontier,
     optimize_portfolio,
 )
-from src.validation import BacktestResult, walk_forward_backtest
+from src.validation import BacktestResult, compare_expected_return_methods, walk_forward_backtest
 from src.visualizer import generate_efficient_frontier
 
 DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
@@ -60,7 +60,7 @@ DEFAULT_DB_PATH = Path("data/portfolio_history.db")
 DEFAULT_OUTPUT_DIR = Path("outputs")
 DEFAULT_MARKET_INDEX = "^GSPC"
 DEFAULT_COVARIANCE_METHOD = "ledoit-wolf"
-DEFAULT_EXPECTED_RETURN_METHOD = "historical_mean"
+DEFAULT_EXPECTED_RETURN_METHOD = "auto"
 DEFAULT_MARKET_RISK_PREMIUM = 0.05
 DEFAULT_TAU = 0.05
 
@@ -85,6 +85,8 @@ class AnalysisResult:
         constraints: Limits applied to the portfolio, if any.
         allocation: Cash allocation that reaches the requested target return.
         validation: Out-of-sample walk-forward results, when requested.
+        comparison: Out-of-sample comparison of the expected-return methods,
+            when requested.
     """
 
     prepared: PreparedPrices
@@ -102,6 +104,7 @@ class AnalysisResult:
     constraints: WeightConstraints | None = None
     allocation: AllocationResult | None = None
     validation: BacktestResult | None = None
+    comparison: pd.DataFrame | None = None
 
 
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
@@ -232,6 +235,8 @@ def run_analysis(
     validate: bool = False,
     validate_window: int = 252,
     validate_rebalance: str = "monthly",
+    compare_estimators: bool = False,
+    compare_methods: Sequence[str] | None = None,
 ) -> AnalysisResult:
     """Run the full mean-variance optimization pipeline.
 
@@ -267,6 +272,10 @@ def run_analysis(
         validate_window: Observations required before the first rebalance of
             the validation run.
         validate_rebalance: ``"monthly"`` or ``"quarterly"``.
+        compare_estimators: Whether to walk-forward every expected-return
+            method and compare them.
+        compare_methods: Which methods to compare; every available method by
+            default.
 
     Returns:
         The completed :class:`AnalysisResult`.
@@ -277,19 +286,33 @@ def run_analysis(
     log_returns = compute_log_returns(prepared.prices)
     covariance = shrunk_covariance(log_returns, method=covariance_method)
 
-    if expected_return_method == "black_litterman":
-        expected_returns = _black_litterman_expected_returns(
-            covariance=covariance,
-            risk_free_rate=risk_free_rate,
-            market_risk_premium=market_risk_premium,
-            tau=tau,
-            tickers=list(log_returns.columns),
-            fundamentals_fetcher=fundamentals_fetcher,
-            fundamentals_cache=fundamentals_cache,
-            refresh_fundamentals=refresh_fundamentals,
-            market_metadata=market_metadata or MarketMetadata(),
-            fx_rates=FxRates.default(usd_hkd),
-        )
+    warnings = list(prepared.warnings)
+    effective_method = expected_return_method
+
+    if expected_return_method in ("black_litterman", "auto"):
+        try:
+            expected_returns = _black_litterman_expected_returns(
+                covariance=covariance,
+                risk_free_rate=risk_free_rate,
+                market_risk_premium=market_risk_premium,
+                tau=tau,
+                tickers=list(log_returns.columns),
+                fundamentals_fetcher=fundamentals_fetcher,
+                fundamentals_cache=fundamentals_cache,
+                refresh_fundamentals=refresh_fundamentals,
+                market_metadata=market_metadata or MarketMetadata(),
+                fx_rates=FxRates.default(usd_hkd),
+            )
+            effective_method = "black_litterman"
+        except OptimizationError:
+            if expected_return_method == "black_litterman":
+                raise
+            expected_returns = historical_mean(log_returns)
+            effective_method = "historical_mean"
+            warnings.append(
+                "no market capitalizations were available, so the expected returns "
+                "fell back to the historical mean"
+            )
     else:
         expected_returns = _estimate_expected_returns(
             expected_return_method,
@@ -363,6 +386,71 @@ def run_analysis(
             constraints=constraints,
         )
 
+    comparison = None
+    if compare_estimators:
+        methods = list(compare_methods) if compare_methods else [
+            "historical_mean",
+            "capm",
+            "black_litterman",
+        ]
+        metadata = market_metadata or MarketMetadata()
+        fx_rates = FxRates.default(usd_hkd)
+
+        market_returns = (
+            _market_log_returns(market_index, start, end, downloader)
+            if "capm" in methods
+            else None
+        )
+        market_weights = None
+        if "black_litterman" in methods:
+            fundamentals = fetch_fundamentals(
+                list(log_returns.columns),
+                cache=FundamentalsCache(fundamentals_cache),
+                fetcher=fundamentals_fetcher,
+                refresh=refresh_fundamentals,
+            )
+            caps = market_caps_in_usd(fundamentals, metadata, fx_rates)
+            market_weights = capitalization_weights(caps) if not caps.empty else None
+
+        def estimator_factory(method: str):
+            def estimate(log_returns: pd.DataFrame) -> tuple[pd.Series, pd.DataFrame]:
+                covariance = shrunk_covariance(log_returns, method=covariance_method)
+                if method == "historical_mean":
+                    expected = historical_mean(log_returns)
+                elif method == "capm":
+                    if market_returns is None:
+                        raise OptimizationError("the CAPM estimator needs a market index")
+                    expected = capm_returns(log_returns, market_returns, risk_free_rate)
+                elif method == "black_litterman":
+                    if market_weights is None:
+                        raise OptimizationError(
+                            "the Black-Litterman estimator needs market capitalizations"
+                        )
+                    expected = black_litterman_returns(
+                        covariance,
+                        market_weights,
+                        risk_free_rate,
+                        market_risk_premium=market_risk_premium,
+                        tau=tau,
+                    )
+                else:
+                    raise OptimizationError(f"unknown expected return method: {method!r}")
+                return expected, covariance
+
+            return estimate
+
+        comparison = compare_expected_return_methods(
+            prepared.prices,
+            methods,
+            estimator_factory,
+            objective=objective,
+            risk_free_rate=risk_free_rate,
+            covariance_method=covariance_method,
+            initial_window=validate_window,
+            rebalance=validate_rebalance,
+            constraints=constraints,
+        )
+
     return AnalysisResult(
         prepared=prepared,
         expected_returns=expected_returns,
@@ -373,12 +461,13 @@ def run_analysis(
         cloud=cloud,
         db_run_id=db_run_id,
         html_path=html_path,
-        warnings=list(prepared.warnings),
-        expected_return_method=expected_return_method,
+        warnings=warnings,
+        expected_return_method=effective_method,
         covariance_method=covariance_method,
         constraints=constraints if constraints.is_active() else None,
         allocation=allocation,
         validation=validation,
+        comparison=comparison,
     )
 
 
@@ -436,12 +525,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-return-method",
-        choices=["historical_mean", "capm", "black_litterman"],
+        choices=["auto", "historical_mean", "capm", "black_litterman"],
         default=DEFAULT_EXPECTED_RETURN_METHOD,
         help=(
-            "How expected returns are estimated: the sample mean of log returns, "
-            "the capital asset pricing model, or a Black-Litterman posterior "
-            "built from market capitalizations (default: historical_mean)"
+            "How expected returns are estimated: auto picks Black-Litterman when "
+            "market capitalizations are available and falls back to the sample "
+            "mean otherwise, historical_mean uses the sample mean, capm uses the "
+            "capital asset pricing model, and black_litterman requires market "
+            f"capitalizations (default: {DEFAULT_EXPECTED_RETURN_METHOD})"
         ),
     )
     parser.add_argument(
@@ -548,6 +639,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="monthly",
         help="Rebalance frequency of the validation run (default: monthly)",
     )
+    parser.add_argument(
+        "--compare-estimators",
+        action="store_true",
+        help=(
+            "Walk-forward every expected-return method and compare the results "
+            "out of sample, so the choice is measured rather than assumed"
+        ),
+    )
     return parser
 
 
@@ -630,6 +729,23 @@ def _print_report(
         f"Sharpe {result.min_vol.sharpe_ratio:.3f}"
     )
 
+    if result.comparison is not None:
+        print("\nEstimator comparison (walk-forward, out of sample)")
+        print(
+            f"  {'method':<18} {'CAGR':>8} {'Sharpe':>8} {'max drawdown':>13} "
+            f"{'bench CAGR':>11} {'bench Sharpe':>13}"
+        )
+        for _, row in result.comparison.iterrows():
+            print(
+                f"  {row['method']:<18} {row['optimized_cagr']:>7.2%} "
+                f"{row['optimized_sharpe']:>8.3f} {row['optimized_max_drawdown']:>12.2%} "
+                f"{row['benchmark_cagr']:>10.2%} {row['benchmark_sharpe']:>13.3f}"
+            )
+        print(
+            "  Note: the Black-Litterman run uses today's market capitalizations, "
+            "so its backtest is mildly optimistic."
+        )
+
     if result.validation is not None:
         validation = result.validation
         print(f"\nOut-of-sample validation ({validation.rebalance_count} rebalances)")
@@ -653,12 +769,18 @@ def _print_report(
     print(line)
 
 
-def main(argv: Sequence[str] | None = None, downloader: Downloader | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    downloader: Downloader | None = None,
+    fundamentals_fetcher: Fetcher | None = None,
+) -> int:
     """Run the optimizer CLI.
 
     Args:
         argv: Argument list; defaults to ``sys.argv[1:]``.
         downloader: Optional price downloader injected for tests.
+        fundamentals_fetcher: Optional fundamentals fetcher injected for
+            tests.
 
     Returns:
         Process exit code (0 on success).
@@ -695,6 +817,7 @@ def main(argv: Sequence[str] | None = None, downloader: Downloader | None = None
         tau=args.tau,
         fundamentals_cache=args.fundamentals_cache,
         refresh_fundamentals=args.refresh_fundamentals,
+        fundamentals_fetcher=fundamentals_fetcher,
         market_metadata=market_metadata,
         usd_hkd=args.usd_hkd,
         min_weights=min_weights,
@@ -704,6 +827,7 @@ def main(argv: Sequence[str] | None = None, downloader: Downloader | None = None
         validate=args.validate,
         validate_window=args.validate_window,
         validate_rebalance=args.validate_rebalance,
+        compare_estimators=args.compare_estimators,
     )
 
     _print_report(result, objective, args.risk_free_rate)
