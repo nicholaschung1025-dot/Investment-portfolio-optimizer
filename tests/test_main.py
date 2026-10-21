@@ -514,6 +514,112 @@ def test_a_fixed_holding_outside_the_universe_is_refused(tmp_path) -> None:
         )
 
 
+def test_duplicate_tickers_are_collapsed(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "AAA", "BBB"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    assert list(result.expected_returns.index) == ["AAA", "BBB"]
+
+
+def test_a_ticker_without_a_market_capitalization_does_not_break_the_estimate(tmp_path) -> None:
+    def only_one_has_a_cap(ticker: str) -> dict:
+        payload = _fundamentals_payload(ticker)
+        if ticker != "AAA":
+            payload.pop("marketCap", None)
+        return payload
+
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=only_one_has_a_cap,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        expected_return_method="black_litterman",
+    )
+
+    assert result.expected_return_method == "black_litterman"
+    assert result.expected_returns.notna().all()
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--fee-bps", "-1"),
+        ("--max-k", "-1"),
+        ("--portfolios", "0"),
+        ("--simulations", "0"),
+        ("--student-t-df", "1"),
+        ("--budget", "0"),
+    ],
+)
+def test_the_cli_refuses_values_that_cannot_mean_anything(flag, value, tmp_path) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--tickers",
+                "AAA",
+                "--start",
+                "2021-01-01",
+                "--end",
+                "2022-06-01",
+                "--db-path",
+                str(tmp_path / "portfolio_history.db"),
+                "--output-dir",
+                str(tmp_path / "outputs"),
+                flag,
+                value,
+            ],
+            downloader=_fake_downloader,
+        )
+
+
+def test_a_refused_request_prints_a_clean_error_instead_of_a_traceback(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "--tickers",
+            "AAA",
+            "BBB",
+            "--start",
+            "2021-01-01",
+            "--end",
+            "2022-06-01",
+            "--min-weight",
+            "AAA=0.9",
+            "--min-weight",
+            "BBB=0.9",
+            "--db-path",
+            str(tmp_path / "portfolio_history.db"),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ],
+        downloader=_fake_downloader,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "error" in captured.err.lower()
+    assert "Traceback" not in captured.err
+
+
 def test_a_minimum_weight_makes_the_stock_a_mandatory_holding(tmp_path) -> None:
     result = run_analysis(
         tickers=["AAA", "BBB", "CCC"],

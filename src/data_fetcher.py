@@ -13,12 +13,13 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from src.errors import PortfolioError
 from src.math_engine import compute_log_returns, detect_zero_variance_assets
 
 Downloader = Callable[..., pd.DataFrame]
 
 
-class DataFetchError(RuntimeError):
+class DataFetchError(PortfolioError):
     """Raised when prices cannot be fetched or no usable assets remain."""
 
 

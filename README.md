@@ -468,6 +468,9 @@ no test ever downloads data.
 | Target return above the tangency return | Raises `AllocationError` |
 | Target return below the risk-free rate | Raises `AllocationError` |
 | Not enough history for a validation window | Raises `OptimizationError` |
+| A value that cannot mean anything (a negative fee, a zero path count, degrees of freedom below 2) | Refused by the argument parser, exit code 2 |
+| A request the optimizer cannot satisfy | One line on stderr, exit code 1, no traceback |
+| The same ticker given twice | Collapsed into one position |
 
 ## Limitations
 

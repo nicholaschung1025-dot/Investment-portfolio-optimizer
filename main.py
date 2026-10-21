@@ -11,6 +11,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -24,7 +25,7 @@ from src.constraints import WeightConstraints
 from src.covariance import CovarianceMethod, shrunk_covariance
 from src.data_fetcher import Downloader, PreparedPrices, fetch_close_prices, prepare_prices
 from src.database import RunRecord, save_run
-from src.errors import ConstraintError, OptimizationError
+from src.errors import ConstraintError, OptimizationError, PortfolioError
 from src.expected_returns import (
     ExpectedReturnMethod,
     black_litterman_returns,
@@ -131,6 +132,73 @@ class AnalysisResult:
     report_path: Path | None = None
 
 
+def _unique_tickers(tickers: Sequence[str]) -> list[str]:
+    """Drop repeated tickers, keeping the order they were given in.
+
+    A ticker that appears twice would produce two columns for the same
+    asset, which quietly breaks everything downstream.
+    """
+    seen: set[str] = set()
+    unique: list[str] = []
+    for ticker in tickers:
+        key = ticker.strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(ticker.strip())
+    return unique
+
+
+def _non_negative_float(value: str) -> float:
+    """Parse a float that cannot be negative."""
+    number = float(value)
+    if number < 0.0:
+        raise argparse.ArgumentTypeError(f"must not be negative, got {value}")
+    return number
+
+
+def _positive_float(value: str) -> float:
+    """Parse a float that has to be positive."""
+    number = float(value)
+    if number <= 0.0:
+        raise argparse.ArgumentTypeError(f"must be positive, got {value}")
+    return number
+
+
+def _non_negative_int(value: str) -> int:
+    """Parse an integer that cannot be negative."""
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"must not be negative, got {value}")
+    return number
+
+
+def _positive_int(value: str) -> int:
+    """Parse an integer that has to be positive."""
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError(f"must be positive, got {value}")
+    return number
+
+
+def _degrees_of_freedom(value: str) -> float:
+    """Parse the degrees of freedom of the Student-t shocks."""
+    number = float(value)
+    if number <= 2.0:
+        raise argparse.ArgumentTypeError(
+            f"must be above 2 for the shocks to have a finite variance, got {value}"
+        )
+    return number
+
+
+def _confidence(value: str) -> float:
+    """Parse the confidence given to an analyst view."""
+    number = float(value)
+    if not 0.0 < number < 1.0:
+        raise argparse.ArgumentTypeError(f"must be between 0 and 1, got {value}")
+    return number
+
+
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
     """Parse ``TICKER=WEIGHT`` arguments into a mapping.
 
@@ -214,8 +282,11 @@ def _black_litterman_inputs(
             for ticker, entry in fundamentals.items()
             if entry.available and entry.price is not None
         }
+        # A ticker without a capitalization carries no weight in the market
+        # portfolio, so the prior has to be computed over the whole universe.
+        aligned = weights.reindex(covariance.index).fillna(0.0)
         prior = risk_free_rate + market_risk_premium * (
-            covariance.to_numpy(dtype=float) @ weights.to_numpy()
+            covariance.to_numpy(dtype=float) @ aligned.to_numpy()
         )
         views = build_analyst_views(
             fundamentals, prices, prior=pd.Series(prior, index=list(covariance.index))
@@ -376,7 +447,7 @@ def run_analysis(
     Returns:
         The completed :class:`AnalysisResult`.
     """
-    raw_prices = fetch_close_prices(tickers, start, end, downloader)
+    raw_prices = fetch_close_prices(_unique_tickers(tickers), start, end, downloader)
     prepared = prepare_prices(raw_prices)
 
     log_returns = compute_log_returns(prepared.prices)
@@ -757,7 +828,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--portfolios",
-        type=int,
+        type=_positive_int,
         default=5000,
         help="Number of Monte Carlo portfolios to sample (default: 5000)",
     )
@@ -790,7 +861,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--market-risk-premium",
-        type=float,
+        type=_non_negative_float,
         default=DEFAULT_MARKET_RISK_PREMIUM,
         help=(
             "Market risk premium used to scale the Black-Litterman equilibrium "
@@ -799,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tau",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_TAU,
         help=f"Uncertainty of the Black-Litterman prior (default: {DEFAULT_TAU})",
     )
@@ -825,7 +896,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--usd-hkd",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_USD_HKD,
         help=f"Hong Kong dollars per US dollar (default: {DEFAULT_USD_HKD})",
     )
@@ -841,7 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-k",
-        type=int,
+        type=_non_negative_int,
         default=0,
         help=(
             "Maximum number of assets to hold. The optimizer searches for the "
@@ -850,7 +921,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--selection-beam",
-        type=int,
+        type=_positive_int,
         default=5,
         help="How many partial selections the search keeps per step (default: 5)",
     )
@@ -866,19 +937,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-weight",
-        type=float,
+        type=_positive_float,
         default=None,
         help="Maximum weight for any single ticker, e.g. 0.35 (default: no cap)",
     )
     parser.add_argument(
         "--max-volatility",
-        type=float,
+        type=_positive_float,
         default=None,
         help="Maximum annualized portfolio volatility, e.g. 0.15 (default: no cap)",
     )
     parser.add_argument(
         "--target-return",
-        type=float,
+        type=_non_negative_float,
         default=None,
         help=(
             "Annualized return the portfolio should reach. The remainder is held "
@@ -895,31 +966,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--min-analyst-count",
-        type=int,
+        type=_non_negative_int,
         default=QualityRules().min_analyst_count,
         help=f"Minimum analyst coverage (default: {QualityRules().min_analyst_count})",
     )
     parser.add_argument(
         "--min-market-cap-usd",
-        type=float,
+        type=_non_negative_float,
         default=QualityRules().min_market_cap_usd,
         help="Minimum market capitalization for US listings, in US dollars",
     )
     parser.add_argument(
         "--min-market-cap-hkd",
-        type=float,
+        type=_non_negative_float,
         default=QualityRules().min_market_cap_hkd,
         help="Minimum market capitalization for Hong Kong listings, in Hong Kong dollars",
     )
     parser.add_argument(
         "--filter-max-volatility",
-        type=float,
+        type=_positive_float,
         default=QualityRules().max_annual_volatility,
         help="Maximum annualized volatility of a candidate",
     )
     parser.add_argument(
         "--min-avg-volume",
-        type=float,
+        type=_non_negative_float,
         default=QualityRules().min_avg_volume,
         help="Minimum average daily share volume",
     )
@@ -933,7 +1004,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--analyst-confidence",
-        type=float,
+        type=_confidence,
         default=0.15,
         help=(
             "How much of the analyst view is believed, from 0 to 1. A low value "
@@ -942,7 +1013,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--budget",
-        type=float,
+        type=_positive_float,
         default=None,
         help=(
             "Amount to invest. When given, the risk of the portfolio is simulated "
@@ -951,7 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--simulations",
-        type=int,
+        type=_positive_int,
         default=10000,
         help="Number of simulated paths in the risk simulation (default: 10000)",
     )
@@ -966,13 +1037,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--student-t-df",
-        type=float,
+        type=_degrees_of_freedom,
         default=5.0,
         help="Degrees of freedom of the Student-t shocks (default: 5)",
     )
     parser.add_argument(
         "--fee-bps",
-        type=float,
+        type=_non_negative_float,
         default=0.0,
         help="One-way trading cost in basis points (default: 0)",
     )
@@ -983,7 +1054,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--validate-window",
-        type=int,
+        type=_positive_int,
         default=252,
         help="Observations required before the first rebalance of the validation run (default: 252)",
     )
@@ -1202,57 +1273,63 @@ def main(
     except ValueError as error:
         parser.error(str(error))
 
-    market_metadata = (
-        MarketMetadata.from_csv(args.market_meta) if args.market_meta else MarketMetadata()
-    )
-
-    result = run_analysis(
-        tickers=tickers,
-        start=args.start,
-        end=args.end,
-        objective=objective,
-        risk_free_rate=args.risk_free_rate,
-        db_path=args.db_path,
-        output_dir=args.output_dir,
-        downloader=downloader,
-        n_portfolios=args.portfolios,
-        expected_return_method=args.expected_return_method,
-        covariance_method=args.covariance_method,
-        market_index=args.market_index,
-        market_risk_premium=args.market_risk_premium,
-        tau=args.tau,
-        fundamentals_cache=args.fundamentals_cache,
-        refresh_fundamentals=args.refresh_fundamentals,
-        fundamentals_fetcher=fundamentals_fetcher,
-        market_metadata=market_metadata,
-        usd_hkd=args.usd_hkd,
-        min_weights=min_weights,
-        max_weight=args.max_weight,
-        max_volatility=args.max_volatility,
-        fixed_tickers=args.fixed,
-        max_k=args.max_k,
-        selection_beam=args.selection_beam,
-        quality_filters=args.quality_filters,
-        quality_rules=QualityRules(
-            min_analyst_count=args.min_analyst_count,
-            min_market_cap_usd=args.min_market_cap_usd,
-            min_market_cap_hkd=args.min_market_cap_hkd,
-            max_annual_volatility=args.filter_max_volatility,
-            min_avg_volume=args.min_avg_volume,
-        ),
-        analyst_views=args.analyst_views,
-        analyst_confidence=args.analyst_confidence,
-        target_return=args.target_return,
-        budget=args.budget,
-        simulations=args.simulations,
-        risk_distribution=args.risk_distribution,
-        student_t_df=args.student_t_df,
-        fee_bps=args.fee_bps,
-        validate=args.validate,
-        validate_window=args.validate_window,
-        validate_rebalance=args.validate_rebalance,
-        compare_estimators=args.compare_estimators,
-    )
+    try:
+        market_metadata = (
+            MarketMetadata.from_csv(args.market_meta) if args.market_meta else MarketMetadata()
+        )
+        result = run_analysis(
+            tickers=tickers,
+            start=args.start,
+            end=args.end,
+            objective=objective,
+            risk_free_rate=args.risk_free_rate,
+            db_path=args.db_path,
+            output_dir=args.output_dir,
+            downloader=downloader,
+            n_portfolios=args.portfolios,
+            expected_return_method=args.expected_return_method,
+            covariance_method=args.covariance_method,
+            market_index=args.market_index,
+            market_risk_premium=args.market_risk_premium,
+            tau=args.tau,
+            fundamentals_cache=args.fundamentals_cache,
+            refresh_fundamentals=args.refresh_fundamentals,
+            fundamentals_fetcher=fundamentals_fetcher,
+            market_metadata=market_metadata,
+            usd_hkd=args.usd_hkd,
+            min_weights=min_weights,
+            max_weight=args.max_weight,
+            max_volatility=args.max_volatility,
+            fixed_tickers=args.fixed,
+            max_k=args.max_k,
+            selection_beam=args.selection_beam,
+            quality_filters=args.quality_filters,
+            quality_rules=QualityRules(
+                min_analyst_count=args.min_analyst_count,
+                min_market_cap_usd=args.min_market_cap_usd,
+                min_market_cap_hkd=args.min_market_cap_hkd,
+                max_annual_volatility=args.filter_max_volatility,
+                min_avg_volume=args.min_avg_volume,
+            ),
+            analyst_views=args.analyst_views,
+            analyst_confidence=args.analyst_confidence,
+            target_return=args.target_return,
+            budget=args.budget,
+            simulations=args.simulations,
+            risk_distribution=args.risk_distribution,
+            student_t_df=args.student_t_df,
+            fee_bps=args.fee_bps,
+            validate=args.validate,
+            validate_window=args.validate_window,
+            validate_rebalance=args.validate_rebalance,
+            compare_estimators=args.compare_estimators,
+        )
+    except PortfolioError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
     _print_report(result, objective, args.risk_free_rate)
     return 0
