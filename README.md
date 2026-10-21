@@ -53,6 +53,15 @@ star) portfolios highlighted.*
 - **Out-of-sample validation** — a walk-forward backtest re-estimates the
   portfolio on a rolling window and reports its performance next to an
   equal-weight benchmark over the same periods.
+- **Risk, not just volatility** — a Student-t simulation (fat-tailed, because
+  financial returns have fat tails) turns the portfolio into a distribution of
+  terminal values, so the loss at the 95% level, the expected loss in the
+  worst 5% and the probability of profit are measured rather than assumed.
+- **Tradable positions** — target weights become whole shares and whole board
+  lots, the leftover cash is reported instead of silently disappearing, and a
+  position too small for one board lot is called out.
+- **Durable, versioned history** — every run is appended to a local SQLite
+  database that is migrated in place, so the history survives an upgrade.
 - **Two objectives** — maximize the Sharpe ratio or minimize portfolio variance;
   both are computed on every run and the chosen one is reported and persisted.
 - **Efficient frontier visualization** — ~5,000 random long-only portfolios
@@ -107,7 +116,9 @@ mean_variance_optimizer/
 │   ├── market.py             # Listing currency, board lot, FX, market weights
 │   ├── fundamentals.py       # Company fundamentals with an on-disk cache
 │   ├── selection.py          # Portfolio selection with mandatory holdings
-│   ├── database.py           # Local SQLite persistence
+│   ├── risk.py               # Tail risk: VaR, expected shortfall, profit odds
+│   ├── sizing.py             # Whole shares, board lots, leftover cash
+│   ├── database.py           # Local SQLite persistence, migrated in place
 │   └── visualizer.py         # Plotly HTML chart generation
 ├── tests/
 │   ├── test_math_engine.py
@@ -120,6 +131,8 @@ mean_variance_optimizer/
 │   ├── test_market.py
 │   ├── test_fundamentals.py
 │   ├── test_selection.py
+│   ├── test_risk.py
+│   ├── test_sizing.py
 │   ├── test_data_fetcher.py
 │   ├── test_database.py
 │   ├── test_visualizer.py
@@ -171,6 +184,12 @@ Target a return and hold the rest in the risk-free asset:
 .\.venv\Scripts\python.exe main.py --target-return 0.12
 ```
 
+Size a real portfolio and see its tail risk:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --budget 100000 --fee-bps 5
+```
+
 Check the result out of sample against an equal-weight benchmark:
 
 ```powershell
@@ -209,6 +228,11 @@ Or just run it with no arguments for a sensible default universe:
 | `--max-weight` | – | Maximum weight for any single ticker, e.g. `0.35` |
 | `--max-volatility` | – | Maximum annualized portfolio volatility, e.g. `0.15` |
 | `--target-return` | – | Annualized return to reach; the rest is held in cash |
+| `--budget` | – | Amount to invest; enables the risk simulation and position sizing |
+| `--simulations` | `10000` | Simulated paths in the risk simulation |
+| `--risk-distribution` | `student_t` | `student_t` or `bootstrap` |
+| `--student-t-df` | `5` | Degrees of freedom of the Student-t shocks |
+| `--fee-bps` | `0` | One-way trading cost in basis points |
 | `--validate` | off | Run the out-of-sample walk-forward backtest |
 | `--validate-window` | `252` | Observations required before the first rebalance |
 | `--validate-rebalance` | `monthly` | `monthly` or `quarterly` |
@@ -243,13 +267,23 @@ browser. No web server is required.
 6. **Capital allocation** — when a target return is requested, the tangency
    portfolio is scaled against the risk-free asset along the capital
    allocation line.
-7. **Persistence** — the run is appended to the local SQLite database.
-8. **Visualization** — 5,000 random long-only portfolios (Dirichlet-sampled,
-   so weights always sum to 1) are plotted as a cloud coloured by Sharpe ratio,
-   alongside the assets and both optimal portfolios.
-9. **Validation** (optional) — the portfolio is re-estimated on a rolling
-   window and applied to the period that follows, then compared with an
-   equal-weight benchmark over the same periods.
+7. **Risk simulation** — when a budget is given, the portfolio is simulated
+   over a year with fat-tailed daily shocks (or by resampling its own
+   history), and the loss at the 95% level, the expected loss in the worst 5%
+   and the probability of profit are read off the distribution.
+8. **Position sizing** — the target weights become whole shares and whole
+   board lots. The leftover cash is reported, and a position too small for
+   one board lot is called out instead of silently vanishing.
+9. **Persistence** — the run, its risk metrics and its positions are appended
+   to the local SQLite database.
+10. **Visualization** — 5,000 random long-only portfolios (Dirichlet-sampled,
+    so weights always sum to 1) are plotted as a cloud coloured by Sharpe
+    ratio, alongside the assets and both optimal portfolios. The capital
+    allocation line and the distribution of terminal values are added when
+    they are available.
+11. **Validation** (optional) — the portfolio is re-estimated on a rolling
+    window and applied to the period that follows, then compared with an
+    equal-weight benchmark over the same periods.
 
 ### Expected-Return Estimators
 
@@ -321,7 +355,10 @@ frequency they expect, and the result is annualized afterwards.
 
 - `data/portfolio_history.db` — one row per run (`Run_ID`, `Tickers`,
   `Date_Range`, `Objective_Used`, `Optimal_Weights` as JSON, `Expected_Return`,
-  `Expected_Volatility`, `Sharpe_Ratio`, `Risk_Free_Rate`, `Created_At`).
+  `Expected_Volatility`, `Sharpe_Ratio`, `Risk_Free_Rate`, `Cash_Weight`,
+  `Target_Return`, `Expected_Return_Method`, `Covariance_Method`, `VAR_95`,
+  `CVAR_95`, `Prob_Profit`, `Estimated_Cost`, `Created_At`), plus one row per
+  position in the `positions` table.
 - `outputs/efficient_frontier_YYYYMMDD.html` — self-contained interactive chart.
 
 Inspect stored history at any time:
@@ -376,8 +413,12 @@ no test ever downloads data.
   cached for 24 hours; pass `--refresh-fundamentals` to fetch them again.
 - Long-only portfolios. Leverage, short selling and derivative overlays are out
   of scope.
-- The persisted run record does not yet store the cash weight, the estimation
-  methods or the validation result.
+- Position sizing uses the latest prices, while the weights come from the
+  historical window, so a position can be too small for one board lot. That is
+  reported rather than rounded away, and the money stays in cash.
+- The risk simulation assumes the portfolio's behaviour over the next year
+  resembles its history; it is a description of the shape of the risk, not a
+  forecast.
 - Prices come from a free, unofficial data source and can be wrong.
 
 ## Notes
