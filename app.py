@@ -33,6 +33,7 @@ from src.database import fetch_positions, fetch_runs
 from src.filters import QualityRules
 from src.fundamentals import DEFAULT_CACHE_PATH
 from src.market import DEFAULT_USD_HKD, MarketMetadata
+from src.report import render_report
 from src.visualizer import build_frontier_figure, build_risk_figure
 
 st.set_page_config(page_title="Portfolio Optimizer", page_icon="📈", layout="wide")
@@ -255,10 +256,17 @@ def _render_portfolio(result: AnalysisResult) -> None:
         result.expected_returns,
         result.covariance,
         allocation=result.allocation,
-        risk=result.risk,
-        risk_free_rate=result.risk_free_rate,
     )
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(figure, width="stretch")
+
+    st.download_button(
+        "Download the report (HTML)",
+        data=render_report(result),
+        file_name="portfolio_report.html",
+        mime="text/html",
+        help="A single self-contained file with the numbers, the charts and the "
+        "positions. It opens without a network connection.",
+    )
 
 
 def _render_risk(result: AnalysisResult) -> None:
@@ -274,7 +282,7 @@ def _render_risk(result: AnalysisResult) -> None:
     columns[2].metric("Probability of profit", f"{metrics.prob_profit:.0%}")
     columns[3].metric("Median value", f"${metrics.median_value:,.0f}")
 
-    st.plotly_chart(build_risk_figure(result.risk), use_container_width=True)
+    st.plotly_chart(build_risk_figure(result.risk), width="stretch")
     st.caption(
         f"Simulated {metrics.simulations:,} paths over one year with "
         f"{result.risk_distribution} shocks. The 5th percentile is "

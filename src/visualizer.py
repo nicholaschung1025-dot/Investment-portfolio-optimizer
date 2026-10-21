@@ -31,6 +31,7 @@ def _add_frontier(
     min_vol: OptimizationResult,
     expected_returns: pd.Series,
     covariance: pd.DataFrame,
+    row: int = 1,
 ) -> None:
     """Draw the portfolio cloud, the assets and the two optimal portfolios."""
     figure.add_trace(
@@ -47,7 +48,9 @@ def _add_frontier(
                 opacity=0.5,
             ),
             hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
 
     asset_vols = [float(covariance.loc[ticker, ticker]) ** 0.5 for ticker in expected_returns.index]
@@ -61,7 +64,9 @@ def _add_frontier(
             textposition="top center",
             marker=dict(size=11, color="black", symbol="circle"),
             hovertemplate="%{text}<br>Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
 
     figure.add_trace(
@@ -72,7 +77,9 @@ def _add_frontier(
             name="Max Sharpe",
             marker=dict(size=18, color="red", symbol="star"),
             hovertemplate="Max Sharpe<br>Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
 
     figure.add_trace(
@@ -83,7 +90,9 @@ def _add_frontier(
             name="Min Volatility",
             marker=dict(size=18, color="blue", symbol="star"),
             hovertemplate="Min Volatility<br>Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
 
 
@@ -110,7 +119,9 @@ def _add_capital_allocation_line(
             name="Capital Allocation Line",
             line=dict(color="grey", dash="dash", width=2),
             hovertemplate="Volatility: %{x:.2%}<br>Return: %{y:.2%}<extra></extra>",
-        )
+        ),
+        row=1,
+        col=1,
     )
 
     figure.add_trace(
@@ -124,7 +135,9 @@ def _add_capital_allocation_line(
                 "Target Return<br>Volatility: %{x:.2%}<br>Return: %{y:.2%}"
                 f"<br>Cash: {allocation.cash_weight:.2%}<extra></extra>"
             ),
-        )
+        ),
+        row=1,
+        col=1,
     )
 
 
@@ -144,7 +157,9 @@ def _add_risk_distribution(
             marker=dict(color="steelblue", opacity=0.75),
             nbinsx=60,
             hovertemplate="Terminal value: $%{x:,.0f}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -154,7 +169,9 @@ def _add_risk_distribution(
             name="Starting budget",
             line=dict(color="black", width=2),
             hovertemplate="Starting budget: $%{x:,.0f}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -164,7 +181,9 @@ def _add_risk_distribution(
             name="Value at Risk (95%)",
             line=dict(color="crimson", width=2, dash="dot"),
             hovertemplate="Value at Risk: $%{x:,.0f}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
     figure.add_trace(
         go.Scatter(
@@ -174,7 +193,9 @@ def _add_risk_distribution(
             name="Expected Shortfall (95%)",
             line=dict(color="darkorange", width=2, dash="dot"),
             hovertemplate="Expected Shortfall: $%{x:,.0f}<extra></extra>",
-        )
+        ),
+        row=row,
+        col=1,
     )
     if row is None:
         return
@@ -224,10 +245,9 @@ def build_frontier_figure(
             subplot_titles=("Efficient frontier", "Risk distribution"),
         )
     else:
-        figure = go.Figure()
+        figure = make_subplots(rows=1, cols=1)
 
-    row = 1
-    _add_frontier(figure, cloud, max_sharpe, min_vol, expected_returns, covariance)
+    _add_frontier(figure, cloud, max_sharpe, min_vol, expected_returns, covariance, row=1)
 
     if allocation is not None:
         _add_capital_allocation_line(
@@ -236,21 +256,19 @@ def build_frontier_figure(
 
     if risk is not None:
         _add_risk_distribution(figure, risk, row=2)
-        row = 2
 
     figure.update_layout(
-        title="Efficient Frontier (Mean-Variance Optimization)",
-        xaxis_title="Annualized Volatility (Risk)",
-        yaxis_title="Annualized Expected Return",
         template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    if row == 1:
-        figure.update_xaxes(tickformat=".1%")
-        figure.update_yaxes(tickformat=".1%")
-    else:
-        figure.update_xaxes(tickformat=".1%", row=1, col=1)
-        figure.update_yaxes(tickformat=".1%", row=1, col=1)
+    if risk is None:
+        figure.update_layout(
+            title="Efficient Frontier (Mean-Variance Optimization)",
+            xaxis_title="Annualized Volatility (Risk)",
+            yaxis_title="Annualized Expected Return",
+        )
+    figure.update_xaxes(tickformat=".1%", row=1, col=1)
+    figure.update_yaxes(tickformat=".1%", row=1, col=1)
     return figure
 
 
@@ -263,8 +281,8 @@ def build_risk_figure(risk: RiskSimulation) -> go.Figure:
     Returns:
         The Plotly figure.
     """
-    figure = go.Figure()
-    _add_risk_distribution(figure, risk)
+    figure = make_subplots(rows=1, cols=1)
+    _add_risk_distribution(figure, risk, row=1)
     figure.update_layout(
         title="Risk distribution over one year",
         xaxis_title="Terminal value (USD)",
@@ -272,7 +290,6 @@ def build_risk_figure(risk: RiskSimulation) -> go.Figure:
         template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    figure.update_xaxes(tickformat="$,.0f")
     return figure
 
 

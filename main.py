@@ -45,6 +45,7 @@ from src.market import (
     MarketMetadata,
     capitalization_weights,
 )
+from src.report import write_report
 from src.math_engine import compute_log_returns
 from src.optimizer import (
     Objective,
@@ -102,6 +103,8 @@ class AnalysisResult:
         positions: The tradable positions, when a budget was given.
         risk_free_rate: Annualized risk-free rate the run used.
         risk_distribution: Distribution the risk simulation used.
+        report_path: Path of the self-contained HTML report, when one was
+            written.
     """
 
     prepared: PreparedPrices
@@ -125,6 +128,7 @@ class AnalysisResult:
     positions: PositionPlan | None = None
     risk_free_rate: float = 0.04
     risk_distribution: str = "student_t"
+    report_path: Path | None = None
 
 
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
@@ -665,7 +669,7 @@ def run_analysis(
             constraints=constraints,
         )
 
-    return AnalysisResult(
+    result = AnalysisResult(
         prepared=prepared,
         expected_returns=expected_returns,
         covariance=covariance,
@@ -688,6 +692,14 @@ def run_analysis(
         risk_free_rate=risk_free_rate,
         risk_distribution=risk_distribution,
     )
+
+    if output_dir is not None:
+        result.report_path = write_report(
+            Path(output_dir) / f"portfolio_report_{date.today():%Y%m%d}.html",
+            result,
+        )
+
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1146,8 +1158,11 @@ def _print_report(
         print(f"  Turnover   : {validation.average_turnover:.2%} per rebalance")
 
     print(f"\nSaved run #{result.db_run_id} to the local SQLite database.")
-    print(f"Chart written to: {result.html_path}")
-    print("Open that HTML file in your browser (double-click) to explore the plot.")
+    if result.html_path is not None:
+        print(f"Chart written to: {result.html_path}")
+    if result.report_path is not None:
+        print(f"Report written to: {result.report_path}")
+    print("Open those files in your browser (double-click) to explore them.")
     print(line)
 
 

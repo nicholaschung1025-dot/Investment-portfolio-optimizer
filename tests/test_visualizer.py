@@ -125,6 +125,34 @@ def test_build_risk_figure_returns_a_figure_with_the_tail_markers() -> None:
     assert "Value at Risk (95%)" in names
 
 
+def test_the_two_panels_of_the_combined_figure_use_different_axes() -> None:
+    expected_returns, covariance, cloud, max_sharpe, min_vol = _inputs()
+    risk = RiskSimulation(
+        metrics=SimpleNamespace(
+            var_95=10_000.0,
+            cvar_95=15_000.0,
+            prob_profit=0.7,
+            median_value=100_000.0,
+            p05=90_000.0,
+            p95=112_000.0,
+            simulations=500,
+        ),
+        terminal_values=np.linspace(80_000.0, 120_000.0, 500),
+    )
+
+    figure = build_frontier_figure(
+        cloud, max_sharpe, min_vol, expected_returns, covariance, risk=risk
+    )
+
+    panels: dict[str, set[str]] = {}
+    for trace in figure.data:
+        panels.setdefault(trace.name, set()).add(trace.xaxis)
+    # The frontier and the risk distribution must not be drawn on the same
+    # axes, or the two panels overlap on top of each other.
+    assert panels["Max Sharpe"] == {"x"}
+    assert panels["Terminal values"] == {"x2"}
+
+
 def test_generate_draws_the_capital_allocation_line(tmp_path) -> None:
     expected_returns, covariance, cloud, max_sharpe, min_vol = _inputs()
     output_path = tmp_path / "frontier.html"

@@ -30,6 +30,12 @@ validation and the run history.*
 build step, no framework, and no dependency beyond the web font and the
 background clip.*
 
+![Portfolio report](docs/portfolio_report.png)
+
+*Every run also produces a self-contained HTML report: the metrics, the
+charts, the positions and the out-of-sample result in one file that opens
+without a network connection.*
+
 ## Running it
 
 There are two front ends over the same pipeline. The app is the interactive
@@ -43,6 +49,15 @@ The app opens on `http://localhost:8501`. It is a standalone project: it
 shares nothing with any other application.
 
 The landing page needs nothing at all -- open `index.html` in a browser.
+
+A run writes two files into `outputs/`: the chart on its own, and a report
+that puts the chart, the numbers and the positions together.
+
+```powershell
+.\.venv\Scripts\python.exe main.py --budget 100000
+```
+
+In the app, the same report is a download button on the Portfolio tab.
 
 ## Features
 
@@ -60,6 +75,9 @@ The landing page needs nothing at all -- open `index.html` in a browser.
   and falls back to the sample mean of log returns when they are not. The
   capital asset pricing model is also available, and a Black-Litterman
   posterior can be built from absolute analyst views.
+- **A report worth sending** — every run produces a single self-contained HTML
+  file with the metric cards, the charts, the positions and the out-of-sample
+  comparison, styled to read in both light and dark mode.
 - **Measured, not assumed** — `--compare-estimators` walks every estimator
   forward out of sample and reports them side by side, so the choice of
   estimator is an empirical question rather than a matter of taste.
@@ -160,6 +178,7 @@ mean_variance_optimizer/
 │   ├── risk.py               # Tail risk: VaR, expected shortfall, profit odds
 │   ├── sizing.py             # Whole shares, board lots, leftover cash
 │   ├── database.py           # Local SQLite persistence, migrated in place
+│   ├── report.py             # Self-contained HTML report
 │   └── visualizer.py         # Plotly HTML chart generation
 ├── tests/
 │   ├── test_math_engine.py
@@ -175,6 +194,7 @@ mean_variance_optimizer/
 │   ├── test_fundamentals.py
 │   ├── test_selection.py
 │   ├── test_analyst.py
+│   ├── test_report.py
 │   ├── test_risk.py
 │   ├── test_sizing.py
 │   ├── test_data_fetcher.py
@@ -432,6 +452,9 @@ frequency they expect, and the result is annualized afterwards.
   `CVAR_95`, `Prob_Profit`, `Estimated_Cost`, `Created_At`), plus one row per
   position in the `positions` table.
 - `outputs/efficient_frontier_YYYYMMDD.html` — self-contained interactive chart.
+- `outputs/portfolio_report_YYYYMMDD.html` — the full report: metric cards,
+  charts, weights, positions and the out-of-sample comparison in one
+  self-contained file.
 
 Inspect stored history at any time:
 
