@@ -24,6 +24,12 @@ estimation method, the constraints and the risk settings, and the tabs show
 the portfolio, the tail risk, the tradable positions, the out-of-sample
 validation and the run history.*
 
+![Landing page](docs/landing_hero.png)
+
+*`index.html` is a self-contained landing page for the project: one file, no
+build step, no framework, and no dependency beyond the web font and the
+background clip.*
+
 ## Running it
 
 There are two front ends over the same pipeline. The app is the interactive
@@ -35,6 +41,8 @@ one; the command line is the scriptable one.
 
 The app opens on `http://localhost:8501`. It is a standalone project: it
 shares nothing with any other application.
+
+The landing page needs nothing at all -- open `index.html` in a browser.
 
 ## Features
 
@@ -130,7 +138,8 @@ mean_variance_optimizer/
 │   └── efficient_frontier_YYYYMMDD.html
 ├── docs/                     # README screenshots
 │   ├── efficient_frontier.png
-│   └── streamlit_app.png
+│   ├── streamlit_app.png
+│   └── landing_hero.png
 ├── src/
 │   ├── __init__.py
 │   ├── errors.py             # Shared exception hierarchy
@@ -174,6 +183,7 @@ mean_variance_optimizer/
 │   └── test_main.py
 ├── main.py                   # CLI entry point / pipeline orchestration
 ├── app.py                    # Streamlit front end
+├── index.html                # Self-contained landing page
 ├── requirements.txt
 ├── pytest.ini
 └── README.md
