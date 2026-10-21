@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.database import fetch_runs
+from src.database import fetch_positions, fetch_runs
 from src.errors import AllocationError, ConstraintError, OptimizationError
 from src.expected_returns import black_litterman_returns
 from main import AnalysisResult, build_parser, main, parse_min_weights, run_analysis
@@ -218,6 +218,109 @@ def test_auto_falls_back_to_the_historical_mean_without_market_caps(tmp_path) ->
 
     assert result.expected_return_method == "historical_mean"
     assert any("capitalization" in warning for warning in result.warnings)
+
+
+def test_a_budget_produces_a_risk_simulation_and_a_position_plan(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        budget=100_000.0,
+    )
+
+    assert result.risk is not None
+    assert result.positions is not None
+    assert result.positions.total_value == pytest.approx(100_000.0, abs=1.0)
+
+
+def test_the_positions_are_stored_with_the_run(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        budget=100_000.0,
+    )
+
+    stored = fetch_positions(tmp_path / "portfolio_history.db", result.db_run_id)
+
+    assert len(stored) == len(result.positions.positions)
+    assert {row["Ticker"] for row in stored} == {
+        position.ticker for position in result.positions.positions
+    }
+
+
+def test_the_run_records_the_risk_metrics(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        budget=100_000.0,
+    )
+
+    runs = fetch_runs(tmp_path / "portfolio_history.db")
+
+    assert runs[0]["var_95"] == pytest.approx(result.risk.metrics.var_95)
+    assert runs[0]["prob_profit"] == pytest.approx(result.risk.metrics.prob_profit)
+
+
+def test_the_report_shows_the_risk_metrics_and_the_positions(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "--tickers",
+            "AAA",
+            "BBB",
+            "CCC",
+            "--start",
+            "2021-01-01",
+            "--end",
+            "2022-06-01",
+            "--db-path",
+            str(tmp_path / "portfolio_history.db"),
+            "--output-dir",
+            str(tmp_path / "outputs"),
+            "--portfolios",
+            "200",
+            "--budget",
+            "100000",
+            "--fundamentals-cache",
+            str(tmp_path / "fundamentals.json"),
+        ],
+        downloader=_fake_downloader,
+        fundamentals_fetcher=_fundamentals_payload,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Value at Risk" in captured.out
+    assert "Expected Shortfall" in captured.out
+    assert "Positions" in captured.out
 
 
 def test_fixed_holdings_are_applied_and_reported(tmp_path) -> None:

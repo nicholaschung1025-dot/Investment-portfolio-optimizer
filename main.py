@@ -50,7 +50,9 @@ from src.optimizer import (
     monte_carlo_frontier,
     optimize_portfolio,
 )
+from src.risk import RiskSimulation, simulate_risk
 from src.selection import DEFAULT_FIXED_WEIGHT, SelectionResult, select_portfolio
+from src.sizing import PositionPlan, size_positions
 from src.validation import BacktestResult, compare_expected_return_methods, walk_forward_backtest
 from src.visualizer import generate_efficient_frontier
 
@@ -89,6 +91,8 @@ class AnalysisResult:
         comparison: Out-of-sample comparison of the expected-return methods,
             when requested.
         selection: The chosen portfolio, when a selection was requested.
+        risk: The simulated risk of the portfolio, when a budget was given.
+        positions: The tradable positions, when a budget was given.
     """
 
     prepared: PreparedPrices
@@ -108,6 +112,8 @@ class AnalysisResult:
     validation: BacktestResult | None = None
     comparison: pd.DataFrame | None = None
     selection: SelectionResult | None = None
+    risk: RiskSimulation | None = None
+    positions: PositionPlan | None = None
 
 
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
@@ -238,6 +244,11 @@ def run_analysis(
     max_k: int = 0,
     selection_beam: int = 5,
     target_return: float | None = None,
+    budget: float | None = None,
+    simulations: int = 10000,
+    risk_distribution: str = "student_t",
+    student_t_df: float = 5.0,
+    fee_bps: float = 0.0,
     validate: bool = False,
     validate_window: int = 252,
     validate_rebalance: str = "monthly",
@@ -279,6 +290,12 @@ def run_analysis(
             step.
         target_return: Return the portfolio should reach; the remainder is
             held in the risk-free asset.
+        budget: Amount to invest. When given, the risk of the portfolio is
+            simulated and the positions are sized.
+        simulations: Number of simulated paths in the risk simulation.
+        risk_distribution: ``"student_t"`` or ``"bootstrap"``.
+        student_t_df: Degrees of freedom of the Student-t shocks.
+        fee_bps: One-way trading cost in basis points.
         validate: Whether to run the out-of-sample walk-forward backtest.
         validate_window: Observations required before the first rebalance of
             the validation run.
@@ -382,6 +399,47 @@ def run_analysis(
         seed=seed,
     )
 
+    final_weights = allocation.risky_weights if allocation else headline.weights
+    cash_weight = allocation.cash_weight if allocation else 0.0
+
+    risk = None
+    positions = None
+    if budget is not None:
+        history = (log_returns[final_weights.index] * final_weights).sum(axis=1)
+        risk = simulate_risk(
+            final_weights,
+            expected_returns,
+            covariance,
+            budget,
+            risk_free_rate=risk_free_rate,
+            simulations=simulations,
+            distribution=risk_distribution,
+            degrees_of_freedom=student_t_df,
+            cash_weight=cash_weight,
+            history=history,
+            seed=seed,
+        )
+
+        fundamentals = fetch_fundamentals(
+            list(expected_returns.index),
+            cache=FundamentalsCache(fundamentals_cache),
+            fetcher=fundamentals_fetcher,
+            refresh=refresh_fundamentals,
+        )
+        prices = {
+            ticker: entry.price
+            for ticker, entry in fundamentals.items()
+            if entry.available and entry.price is not None
+        }
+        positions = size_positions(
+            final_weights,
+            prices,
+            budget,
+            metadata=market_metadata or MarketMetadata(),
+            fx_rates=FxRates.default(usd_hkd),
+            fee_bps=fee_bps,
+        )
+
     db_run_id = save_run(
         db_path,
         RunRecord(
@@ -394,6 +452,15 @@ def run_analysis(
             expected_volatility=headline.volatility,
             sharpe_ratio=headline.sharpe_ratio,
             risk_free_rate=risk_free_rate,
+            cash_weight=cash_weight,
+            target_return=target_return,
+            expected_return_method=effective_method,
+            covariance_method=covariance_method,
+            var_95=risk.metrics.var_95 if risk else None,
+            cvar_95=risk.metrics.cvar_95 if risk else None,
+            prob_profit=risk.metrics.prob_profit if risk else None,
+            estimated_cost=positions.estimated_cost if positions else None,
+            positions=list(positions.positions) if positions else [],
         ),
     )
 
@@ -404,6 +471,9 @@ def run_analysis(
         min_vol,
         expected_returns,
         covariance,
+        allocation=allocation,
+        risk=risk,
+        risk_free_rate=risk_free_rate,
     )
 
     validation = None
@@ -501,6 +571,8 @@ def run_analysis(
         validation=validation,
         comparison=comparison,
         selection=selection,
+        risk=risk,
+        positions=positions,
     )
 
 
@@ -681,6 +753,42 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help=(
+            "Amount to invest. When given, the risk of the portfolio is simulated "
+            "and the positions are sized into whole shares and board lots"
+        ),
+    )
+    parser.add_argument(
+        "--simulations",
+        type=int,
+        default=10000,
+        help="Number of simulated paths in the risk simulation (default: 10000)",
+    )
+    parser.add_argument(
+        "--risk-distribution",
+        choices=["student_t", "bootstrap"],
+        default="student_t",
+        help=(
+            "Distribution of the simulated returns: fat-tailed Student-t shocks "
+            "or a resampling of the portfolio's own history (default: student_t)"
+        ),
+    )
+    parser.add_argument(
+        "--student-t-df",
+        type=float,
+        default=5.0,
+        help="Degrees of freedom of the Student-t shocks (default: 5)",
+    )
+    parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=0.0,
+        help="One-way trading cost in basis points (default: 0)",
+    )
+    parser.add_argument(
         "--validate",
         action="store_true",
         help="Run the out-of-sample walk-forward backtest and report it",
@@ -801,6 +909,39 @@ def _print_report(
         f"Sharpe {result.min_vol.sharpe_ratio:.3f}"
     )
 
+    if result.risk is not None:
+        metrics = result.risk.metrics
+        print("\nRisk (simulated over one year)")
+        print(f"  Value at Risk (95%)      : ${metrics.var_95:,.2f}")
+        print(f"  Expected Shortfall (95%) : ${metrics.cvar_95:,.2f}")
+        print(f"  Probability of profit    : {metrics.prob_profit:.0%}")
+        print(
+            f"  Median value             : ${metrics.median_value:,.2f} "
+            f"(5th {metrics.p05:,.0f} / 95th {metrics.p95:,.0f})"
+        )
+        print(f"  Simulated paths          : {metrics.simulations:,}")
+
+    if result.positions is not None:
+        plan = result.positions
+        print("\nPositions")
+        print(
+            f"  {'ticker':<12} {'target':>8} {'realized':>9} {'shares':>10} "
+            f"{'lot':>6} {'price':>12} {'value USD':>14}"
+        )
+        for position in plan.positions:
+            print(
+                f"  {position.ticker:<12} {position.target_weight:>7.2%} "
+                f"{position.realized_weight:>8.2%} {position.shares:>10} "
+                f"{position.board_lot:>6} {position.price:>9,.2f} "
+                f"{position.currency:<4} {position.value_usd:>13,.2f}"
+            )
+        print(f"  {'CASH':<12} {'':>8} {'':>9} {'':>10} {'':>6} {'':>12} {plan.cash_value:>13,.2f}")
+        print(f"  Estimated entry cost     : ${plan.estimated_cost:,.2f}")
+        for warning in plan.warnings:
+            print(f"  WARNING: {warning}")
+        for ticker in plan.skipped:
+            print(f"  Skipped {ticker}: no price available")
+
     if result.comparison is not None:
         print("\nEstimator comparison (walk-forward, out of sample)")
         print(
@@ -899,6 +1040,11 @@ def main(
         max_k=args.max_k,
         selection_beam=args.selection_beam,
         target_return=args.target_return,
+        budget=args.budget,
+        simulations=args.simulations,
+        risk_distribution=args.risk_distribution,
+        student_t_df=args.student_t_df,
+        fee_bps=args.fee_bps,
         validate=args.validate,
         validate_window=args.validate_window,
         validate_rebalance=args.validate_rebalance,

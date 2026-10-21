@@ -6,10 +6,15 @@ export is caught without a browser.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import numpy as np
 import pandas as pd
 import pytest
 
+from src.allocation import AllocationResult
 from src.optimizer import OptimizationResult
+from src.risk import RiskSimulation
 from src.visualizer import generate_efficient_frontier
 
 
@@ -85,3 +90,61 @@ def test_generate_creates_parent_directory(tmp_path) -> None:
     )
 
     assert output_path.exists()
+
+
+def test_generate_draws_the_capital_allocation_line(tmp_path) -> None:
+    expected_returns, covariance, cloud, max_sharpe, min_vol = _inputs()
+    output_path = tmp_path / "frontier.html"
+    allocation = AllocationResult(
+        risky_weights=pd.Series({"AAA": 0.25, "BBB": 0.15, "CCC": 0.10}),
+        cash_weight=0.5,
+        expected_return=0.065,
+        volatility=0.075,
+        sharpe_ratio=0.33,
+        target_return=0.065,
+    )
+
+    generate_efficient_frontier(
+        output_path,
+        cloud,
+        max_sharpe,
+        min_vol,
+        expected_returns,
+        covariance,
+        allocation=allocation,
+    )
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "Capital Allocation Line" in html
+
+
+def test_generate_draws_the_risk_distribution(tmp_path) -> None:
+    expected_returns, covariance, cloud, max_sharpe, min_vol = _inputs()
+    output_path = tmp_path / "frontier.html"
+    terminal_values = np.linspace(80_000.0, 120_000.0, 500)
+    risk = RiskSimulation(
+        metrics=SimpleNamespace(
+            var_95=10_000.0,
+            cvar_95=15_000.0,
+            prob_profit=0.7,
+            median_value=100_000.0,
+            p05=90_000.0,
+            p95=112_000.0,
+            simulations=500,
+        ),
+        terminal_values=terminal_values,
+    )
+
+    generate_efficient_frontier(
+        output_path,
+        cloud,
+        max_sharpe,
+        min_vol,
+        expected_returns,
+        covariance,
+        risk=risk,
+    )
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "Terminal value" in html
+    assert "Value at Risk" in html
