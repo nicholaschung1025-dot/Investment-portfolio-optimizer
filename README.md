@@ -36,6 +36,13 @@ star) portfolios highlighted.*
 - **Measured, not assumed** — `--compare-estimators` walks every estimator
   forward out of sample and reports them side by side, so the choice of
   estimator is an empirical question rather than a matter of taste.
+- **Portfolio selection with mandatory holdings** — name the positions that must
+  be in the portfolio and how many names to hold; a beam search finds the
+  best subset and is checked against an exhaustive enumeration. A mandatory
+  holding carries a minimum weight, so it cannot be satisfied in name only.
+- **Multiple markets** — US and Hong Kong listings in one portfolio, with
+  board lots, per-market currencies and market capitalizations converted into
+  US dollars before they are added up.
 - **Portfolio constraints** — minimum weights (how a mandatory core holding is
   expressed), a maximum weight per asset, and a maximum portfolio volatility.
   Infeasible requests are refused with a clear message instead of an obscure
@@ -99,6 +106,7 @@ mean_variance_optimizer/
 │   ├── validation.py         # Walk-forward backtest vs equal weight
 │   ├── market.py             # Listing currency, board lot, FX, market weights
 │   ├── fundamentals.py       # Company fundamentals with an on-disk cache
+│   ├── selection.py          # Portfolio selection with mandatory holdings
 │   ├── database.py           # Local SQLite persistence
 │   └── visualizer.py         # Plotly HTML chart generation
 ├── tests/
@@ -111,6 +119,7 @@ mean_variance_optimizer/
 │   ├── test_validation.py
 │   ├── test_market.py
 │   ├── test_fundamentals.py
+│   ├── test_selection.py
 │   ├── test_data_fetcher.py
 │   ├── test_database.py
 │   ├── test_visualizer.py
@@ -148,6 +157,12 @@ Force a core holding into the portfolio and cap single-asset concentration:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --min-weight AAPL=0.25 --min-weight MSFT=0.15 --max-weight 0.30
+```
+
+Choose which assets to hold, with a mandatory holding that is always in:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --tickers AAPL MSFT 0700.HK 0005.HK 9988.HK --fixed 0700.HK --max-k 3 --max-weight 0.40
 ```
 
 Target a return and hold the rest in the risk-free asset:
@@ -188,6 +203,9 @@ Or just run it with no arguments for a sensible default universe:
 | `--market-meta` | – | CSV overriding the built-in market metadata |
 | `--usd-hkd` | `7.82` | Hong Kong dollars per US dollar |
 | `--min-weight` | – | Minimum weight per ticker, e.g. `AAPL=0.25`; repeatable |
+| `--fixed` | – | A holding that must be in the portfolio; repeatable |
+| `--max-k` | `0` | Maximum number of assets to hold; 0 keeps the whole universe |
+| `--selection-beam` | `5` | Partial selections the search keeps per step |
 | `--max-weight` | – | Maximum weight for any single ticker, e.g. `0.35` |
 | `--max-volatility` | – | Maximum annualized portfolio volatility, e.g. `0.15` |
 | `--target-return` | – | Annualized return to reach; the rest is held in cash |
@@ -212,20 +230,24 @@ browser. No web server is required.
    then annualized over a fixed **252-trading-day** year:
    - expected return = mean daily log return x 252
    - covariance = shrinkage estimator applied to the daily covariance, x 252
-4. **Optimization** — SLSQP minimizes `-(Sharpe)` or portfolio variance subject
+4. **Selection** — when `--max-k` is set, a beam search grows the portfolio
+   one asset at a time, keeping the most promising partial selections. The
+   mandatory holdings are part of the portfolio from the first step and
+   carry a minimum weight.
+5. **Optimization** — SLSQP minimizes `-(Sharpe)` or portfolio variance subject
    to `sum(w) = 1` and `0 <= w <= 1`, where
    `Sharpe = (E[r] - r_f) / sigma` and `sigma = sqrt(wᵀ Σ w)`. Minimum weights
    are substituted out (`w_i = m_i + u_i`) so the solver always works on
    interior variables, and a volatility cap is passed as a nonlinear
    constraint.
-5. **Capital allocation** — when a target return is requested, the tangency
+6. **Capital allocation** — when a target return is requested, the tangency
    portfolio is scaled against the risk-free asset along the capital
    allocation line.
-6. **Persistence** — the run is appended to the local SQLite database.
-7. **Visualization** — 5,000 random long-only portfolios (Dirichlet-sampled,
+7. **Persistence** — the run is appended to the local SQLite database.
+8. **Visualization** — 5,000 random long-only portfolios (Dirichlet-sampled,
    so weights always sum to 1) are plotted as a cloud coloured by Sharpe ratio,
    alongside the assets and both optimal portfolios.
-8. **Validation** (optional) — the portfolio is re-estimated on a rolling
+9. **Validation** (optional) — the portfolio is re-estimated on a rolling
    window and applied to the period that follows, then compared with an
    equal-weight benchmark over the same periods.
 

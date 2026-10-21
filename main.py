@@ -50,6 +50,7 @@ from src.optimizer import (
     monte_carlo_frontier,
     optimize_portfolio,
 )
+from src.selection import DEFAULT_FIXED_WEIGHT, SelectionResult, select_portfolio
 from src.validation import BacktestResult, compare_expected_return_methods, walk_forward_backtest
 from src.visualizer import generate_efficient_frontier
 
@@ -87,6 +88,7 @@ class AnalysisResult:
         validation: Out-of-sample walk-forward results, when requested.
         comparison: Out-of-sample comparison of the expected-return methods,
             when requested.
+        selection: The chosen portfolio, when a selection was requested.
     """
 
     prepared: PreparedPrices
@@ -105,6 +107,7 @@ class AnalysisResult:
     allocation: AllocationResult | None = None
     validation: BacktestResult | None = None
     comparison: pd.DataFrame | None = None
+    selection: SelectionResult | None = None
 
 
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
@@ -231,6 +234,9 @@ def run_analysis(
     min_weights: dict[str, float] | None = None,
     max_weight: float | None = None,
     max_volatility: float | None = None,
+    fixed_tickers: Sequence[str] | None = None,
+    max_k: int = 0,
+    selection_beam: int = 5,
     target_return: float | None = None,
     validate: bool = False,
     validate_window: int = 252,
@@ -266,6 +272,11 @@ def run_analysis(
         min_weights: Minimum weight per ticker, for mandatory holdings.
         max_weight: Maximum weight for any single ticker.
         max_volatility: Maximum annualized portfolio volatility.
+        fixed_tickers: Holdings that must be part of the portfolio.
+        max_k: Maximum number of assets to hold; zero keeps the whole
+            universe.
+        selection_beam: How many partial selections the search keeps per
+            step.
         target_return: Return the portfolio should reach; the remainder is
             held in the risk-free asset.
         validate: Whether to run the out-of-sample walk-forward backtest.
@@ -324,11 +335,32 @@ def run_analysis(
             downloader,
         )
 
+    fixed = list(dict.fromkeys(fixed_tickers or []))
+    effective_min_weights = dict(min_weights or {})
+    for ticker in fixed:
+        effective_min_weights.setdefault(ticker, DEFAULT_FIXED_WEIGHT)
     constraints = WeightConstraints(
-        min_weights=dict(min_weights or {}),
+        min_weights=effective_min_weights,
         max_weight=max_weight,
         max_volatility=max_volatility,
     )
+
+    selection = None
+    if max_k and max_k < len(expected_returns.index):
+        selection = select_portfolio(
+            expected_returns,
+            covariance,
+            fixed,
+            max_k,
+            objective=objective,
+            risk_free_rate=risk_free_rate,
+            constraints=constraints,
+            beam_width=selection_beam,
+        )
+        expected_returns = expected_returns[selection.tickers]
+        covariance = covariance.loc[selection.tickers, selection.tickers]
+        if selection.constraints is not None:
+            constraints = selection.constraints
 
     max_sharpe = optimize_portfolio(
         expected_returns, covariance, "max_sharpe", risk_free_rate, constraints=constraints
@@ -468,6 +500,7 @@ def run_analysis(
         allocation=allocation,
         validation=validation,
         comparison=comparison,
+        selection=selection,
     )
 
 
@@ -592,6 +625,31 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Hong Kong dollars per US dollar (default: {DEFAULT_USD_HKD})",
     )
     parser.add_argument(
+        "--fixed",
+        action="append",
+        default=[],
+        metavar="TICKER",
+        help=(
+            "A holding that must be part of the portfolio. Repeat the flag for "
+            "several mandatory holdings; each gets a minimum weight."
+        ),
+    )
+    parser.add_argument(
+        "--max-k",
+        type=int,
+        default=0,
+        help=(
+            "Maximum number of assets to hold. The optimizer searches for the "
+            "best subset; zero keeps the whole universe (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--selection-beam",
+        type=int,
+        default=5,
+        help="How many partial selections the search keeps per step (default: 5)",
+    )
+    parser.add_argument(
         "--min-weight",
         action="append",
         default=[],
@@ -690,6 +748,20 @@ def _print_report(
         if constraints.max_volatility is not None:
             parts.append(f"maximum volatility {constraints.max_volatility:.0%}")
         print(f"Constraints : {'; '.join(parts)}")
+
+    if result.selection is not None:
+        selection = result.selection
+        print("\nSelection")
+        if selection.fixed_tickers:
+            print(f"  Mandatory holdings : {', '.join(selection.fixed_tickers)}")
+        else:
+            print("  Mandatory holdings : none")
+        print(f"  Chosen             : {', '.join(selection.tickers)}")
+        for step in selection.steps:
+            print(
+                f"    step {step['added']:<10} added, "
+                f"portfolio {', '.join(step['portfolio'])}"
+            )
 
     print("\nPer-asset annualized metrics")
     for ticker in result.expected_returns.index:
@@ -823,6 +895,9 @@ def main(
         min_weights=min_weights,
         max_weight=args.max_weight,
         max_volatility=args.max_volatility,
+        fixed_tickers=args.fixed,
+        max_k=args.max_k,
+        selection_beam=args.selection_beam,
         target_return=args.target_return,
         validate=args.validate,
         validate_window=args.validate_window,

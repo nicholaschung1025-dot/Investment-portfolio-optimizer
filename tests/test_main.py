@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from src.database import fetch_runs
-from src.errors import AllocationError, OptimizationError
+from src.errors import AllocationError, ConstraintError, OptimizationError
 from src.expected_returns import black_litterman_returns
 from main import AnalysisResult, build_parser, main, parse_min_weights, run_analysis
 
@@ -218,6 +218,78 @@ def test_auto_falls_back_to_the_historical_mean_without_market_caps(tmp_path) ->
 
     assert result.expected_return_method == "historical_mean"
     assert any("capitalization" in warning for warning in result.warnings)
+
+
+def test_fixed_holdings_are_applied_and_reported(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        fixed_tickers=["BBB"],
+        max_k=2,
+    )
+
+    assert result.selection is not None
+    assert "BBB" in result.selection.tickers
+    assert result.selection.weights["BBB"] >= 0.05 - 1e-6
+
+
+def test_max_k_limits_the_size_of_the_portfolio(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        max_k=2,
+    )
+
+    assert result.selection is not None
+    assert len(result.selection.tickers) == 2
+    assert len(result.headline.weights) == 2
+
+
+def test_a_fixed_holding_outside_the_universe_is_refused(tmp_path) -> None:
+    with pytest.raises(ConstraintError):
+        run_analysis(
+            tickers=["AAA", "BBB", "CCC"],
+            start="2021-01-01",
+            end="2022-06-01",
+            objective="max_sharpe",
+            risk_free_rate=0.04,
+            db_path=tmp_path / "portfolio_history.db",
+            output_dir=tmp_path / "outputs",
+            downloader=_fake_downloader,
+            n_portfolios=200,
+            seed=1,
+            fundamentals_fetcher=_no_fundamentals,
+            fundamentals_cache=tmp_path / "fundamentals.json",
+            fixed_tickers=["NOPE"],
+            max_k=2,
+        )
+
+
+def test_the_parser_accepts_the_selection_flags() -> None:
+    args = build_parser().parse_args(["--fixed", "AAA", "--fixed", "BBB", "--max-k", "4"])
+
+    assert args.fixed == ["AAA", "BBB"]
+    assert args.max_k == 4
 
 
 def test_black_litterman_uses_market_capitalization_weights(tmp_path) -> None:
