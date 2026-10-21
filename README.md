@@ -138,7 +138,7 @@ MIT. See [LICENSE](LICENSE).
 ## Project Structure
 
 ```text
-mean_variance_optimizer/
+Investment-portfolio-optimizer/
 ├── data/                     # Local SQLite database (gitignored)
 │   └── portfolio_history.db
 ├── outputs/                  # Generated HTML charts and reports (gitignored)
@@ -199,7 +199,7 @@ mean_variance_optimizer/
 
 ```powershell
 git clone https://github.com/nicholaschung1025-dot/Investment-portfolio-optimizer.git
-cd mean_variance_optimizer
+cd Investment-portfolio-optimizer
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
