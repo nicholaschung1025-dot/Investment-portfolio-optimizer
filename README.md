@@ -17,13 +17,6 @@ self-contained HTML file you open by double-clicking.
 individually and the optimal Max-Sharpe (red star) and Min-Volatility (blue
 star) portfolios highlighted.*
 
-![Streamlit app](docs/streamlit_app.png)
-
-*The same engine as a Streamlit app: the sidebar collects the universe, the
-estimation method, the constraints and the risk settings, and the tabs show
-the portfolio, the tail risk, the tradable positions, the out-of-sample
-validation and the run history.*
-
 ![Landing page](docs/landing_hero.png)
 
 *`index.html` is a self-contained landing page for the project: one file, no
@@ -38,26 +31,16 @@ without a network connection.*
 
 ## Running it
 
-There are two front ends over the same pipeline. The app is the interactive
-one; the command line is the scriptable one.
+Everything runs from the terminal. There is no server and nothing to deploy.
 
 ```powershell
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe main.py --tickers AAPL MSFT GOOGL --budget 100000
 ```
-
-The app opens on `http://localhost:8501`. It is a standalone project: it
-shares nothing with any other application.
-
-The landing page needs nothing at all -- open `index.html` in a browser.
 
 A run writes two files into `outputs/`: the chart on its own, and a report
 that puts the chart, the numbers and the positions together.
 
-```powershell
-.\.venv\Scripts\python.exe main.py --budget 100000
-```
-
-In the app, the same report is a download button on the Portfolio tab.
+The landing page needs nothing at all -- open `index.html` in a browser.
 
 ## Features
 
@@ -141,8 +124,8 @@ In the app, the same report is a download button on the Portfolio tab.
 | Data source | `yfinance` (free, no API key) |
 | Optimization | `scipy.optimize` (SLSQP, analytic gradients) |
 | Covariance | `scikit-learn` (Ledoit-Wolf, OAS shrinkage) |
-| Visualization | `plotly` (self-contained HTML export, and inline in the app) |
-| Interface | `streamlit` (the app), `argparse` (the command line) |
+| Visualization | `plotly` (self-contained HTML chart and report) |
+| Interface | `argparse` (the command line) |
 | Persistence | SQLite (single local `.db` file) |
 | Testing | `pytest` |
 
@@ -152,16 +135,16 @@ In the app, the same report is a download button on the Portfolio tab.
 mean_variance_optimizer/
 ├── data/                     # Local SQLite database (gitignored)
 │   └── portfolio_history.db
-├── outputs/                  # Generated HTML charts (gitignored)
-│   └── efficient_frontier_YYYYMMDD.html
+├── outputs/                  # Generated HTML charts and reports (gitignored)
+│   ├── efficient_frontier_YYYYMMDD.html
+│   └── portfolio_report_YYYYMMDD.html
 ├── docs/                     # README screenshots
 │   ├── efficient_frontier.png
-│   ├── streamlit_app.png
+│   ├── portfolio_report.png
 │   └── landing_hero.png
 ├── src/
 │   ├── __init__.py
 │   ├── errors.py             # Shared exception hierarchy
-│   ├── app_helpers.py        # Parsing and tables for the Streamlit app
 │   ├── data_fetcher.py       # Fetch + clean prices, align calendars
 │   ├── math_engine.py        # Log returns, annualized metrics, covariance
 │   ├── covariance.py         # Sample / Ledoit-Wolf / OAS covariance
@@ -183,8 +166,6 @@ mean_variance_optimizer/
 ├── tests/
 │   ├── test_math_engine.py
 │   ├── test_optimizer.py
-│   ├── test_app.py           # The Streamlit app, run through Streamlit's harness
-│   ├── test_app_helpers.py
 │   ├── test_covariance.py
 │   ├── test_expected_returns.py
 │   ├── test_constraints.py
@@ -202,7 +183,6 @@ mean_variance_optimizer/
 │   ├── test_visualizer.py
 │   └── test_main.py
 ├── main.py                   # CLI entry point / pipeline orchestration
-├── app.py                    # Streamlit front end
 ├── index.html                # Self-contained landing page
 ├── requirements.txt
 ├── pytest.ini
@@ -260,12 +240,6 @@ Check the result out of sample against an equal-weight benchmark:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --validate --validate-rebalance monthly
-```
-
-The same thing through the app, with the results in the browser:
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
 Or just run it with no arguments for a sensible default universe:
