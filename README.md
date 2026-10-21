@@ -1,4 +1,6 @@
-# mean-variance-optimizer
+# Investment-portfolio-optimizer
+
+[![tests](https://github.com/nicholaschung1025-dot/Investment-portfolio-optimizer/actions/workflows/tests.yml/badge.svg)](https://github.com/nicholaschung1025-dot/Investment-portfolio-optimizer/actions/workflows/tests.yml)
 
 A fully local, deterministic Python implementation of Harry Markowitz's
 Modern Portfolio Theory. Give it a list of tickers and a date range, and it
@@ -41,6 +43,10 @@ A run writes two files into `outputs/`: the chart on its own, and a report
 that puts the chart, the numbers and the positions together.
 
 The landing page needs nothing at all -- open `index.html` in a browser.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Features
 
@@ -192,7 +198,7 @@ mean_variance_optimizer/
 ## Installation (native Windows)
 
 ```powershell
-git clone <repo>
+git clone https://github.com/nicholaschung1025-dot/Investment-portfolio-optimizer.git
 cd mean_variance_optimizer
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -254,47 +260,47 @@ Or just run it with no arguments for a sensible default universe:
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--tickers` | `AAPL MSFT GOOGL AMZN NVDA` | Ticker symbols to optimize |
-| `--start` | `2020-01-01` | Inclusive start date (`YYYY-MM-DD`) |
-| `--end` | today | Inclusive end date (`YYYY-MM-DD`) |
-| `--objective` | `max_sharpe` | `max_sharpe` or `min_vol` |
-| `--risk-free-rate` | `0.04` | Annualized risk-free rate |
-| `--db-path` | `data/portfolio_history.db` | SQLite database path |
-| `--output-dir` | `outputs` | Directory for the HTML chart |
-| `--portfolios` | `5000` | Monte Carlo portfolios to sample |
-| `--expected-return-method` | `auto` | `auto`, `historical_mean`, `capm` or `black_litterman` |
-| `--covariance-method` | `ledoit-wolf` | `sample`, `ledoit-wolf` or `oas` |
-| `--market-index` | `^GSPC` | Market index used by the CAPM estimator |
-| `--market-risk-premium` | `0.05` | Risk premium scaling the Black-Litterman equilibrium |
-| `--tau` | `0.05` | Uncertainty of the Black-Litterman prior |
-| `--fundamentals-cache` | `data/fundamentals_cache.json` | Where raw fundamentals are cached |
-| `--refresh-fundamentals` | off | Ignore the fundamentals cache and fetch again |
-| `--market-meta` | – | CSV overriding the built-in market metadata |
-| `--usd-hkd` | `7.82` | Hong Kong dollars per US dollar |
-| `--min-weight` | – | Minimum weight per ticker, e.g. `AAPL=0.25`; repeatable. A ticker with a minimum is always held |
-| `--fixed` | – | A holding that must be in the portfolio; repeatable. Gets a 5% floor |
-| `--max-k` | `0` | Maximum number of assets to hold; 0 keeps the whole universe |
-| `--selection-beam` | `5` | Partial selections the search keeps per step |
-| `--quality-filters` | off | Exclude companies that fail the quality rules |
-| `--min-analyst-count` | `10` | Minimum analyst coverage |
-| `--min-market-cap-usd` | `10000000000` | Minimum market cap for US listings |
-| `--min-market-cap-hkd` | `80000000000` | Minimum market cap for Hong Kong listings |
+| `--tickers` | `AAPL MSFT GOOGL AMZN NVDA` | Ticker symbols to optimize (default: AAPL MSFT GOOGL AMZN NVDA) |
+| `--start` | `2020-01-01` | Start date (default: 2020-01-01) |
+| `--end` | `today` | End date (default: today) |
+| `--objective` | `max_sharpe` | Optimization objective (default: max_sharpe) |
+| `--risk-free-rate` | `0.04` | Annualized risk-free rate (default: 0.04) |
+| `--db-path` | `data/portfolio_history.db` | SQLite database path (default: data\portfolio_history.db) |
+| `--output-dir` | `outputs` | Directory for the HTML chart (default: outputs) |
+| `--portfolios` | `5000` | Number of Monte Carlo portfolios to sample (default: 5000) |
+| `--expected-return-method` | `auto` | How expected returns are estimated: auto picks Black-Litterman when market capitalizations are available and falls back to the sample mean otherwise, historical_mean uses the sample mean, capm uses the capital asset pricing model, and black_litterman requires market capitalizations (default: auto) |
+| `--covariance-method` | `ledoit-wolf` | How the covariance matrix is estimated. Shrinkage estimators pull the noisy sample covariance towards a scaled identity matrix, which stabilizes the optimizer (default: ledoit-wolf) |
+| `--market-index` | `^GSPC` | Market index used by the CAPM estimator (default: ^GSPC) |
+| `--market-risk-premium` | `0.05` | Market risk premium used to scale the Black-Litterman equilibrium returns (default: 0.05) |
+| `--tau` | `0.05` | Uncertainty of the Black-Litterman prior (default: 0.05) |
+| `--fundamentals-cache` | `data/fundamentals_cache.json` | Where raw fundamentals are cached (default: data\fundamentals_cache.json) |
+| `--refresh-fundamentals` | `off` | Ignore the fundamentals cache and fetch everything again |
+| `--market-meta` | `-` | CSV file with ticker, currency, board_lot and market columns that overrides the built-in market metadata |
+| `--usd-hkd` | `7.82` | Hong Kong dollars per US dollar (default: 7.82) |
+| `--fixed` | `-` | A holding that must be part of the portfolio. Repeat the flag for several mandatory holdings; each gets a minimum weight. |
+| `--max-k` | `0` | Maximum number of assets to hold. The optimizer searches for the best subset; zero keeps the whole universe (default: 0) |
+| `--selection-beam` | `5` | How many partial selections the search keeps per step (default: 5) |
+| `--min-weight` | `-` | Minimum weight for a ticker, e.g. AAPL=0.25. Repeat the flag for several mandatory holdings. |
+| `--max-weight` | `-` | Maximum weight for any single ticker, e.g. 0.35 (default: no cap) |
+| `--max-volatility` | `-` | Maximum annualized portfolio volatility, e.g. 0.15 (default: no cap) |
+| `--target-return` | `-` | Annualized return the portfolio should reach. The remainder is held in the risk-free asset (default: fully invested) |
+| `--quality-filters` | `off` | Exclude companies that fail the quality rules -- too small, too thinly traded, too volatile or too poorly covered -- before optimizing |
+| `--min-analyst-count` | `10` | Minimum analyst coverage (default: 10) |
+| `--min-market-cap-usd` | `1e+10` | Minimum market capitalization for US listings, in US dollars |
+| `--min-market-cap-hkd` | `8e+10` | Minimum market capitalization for Hong Kong listings, in Hong Kong dollars |
 | `--filter-max-volatility` | `0.5` | Maximum annualized volatility of a candidate |
-| `--min-avg-volume` | `5000000` | Minimum average daily share volume |
-| `--analyst-views` | off | Use analyst price targets as Black-Litterman views |
-| `--analyst-confidence` | `0.15` | How much of the analyst view is believed |
-| `--max-weight` | – | Maximum weight for any single ticker, e.g. `0.35` |
-| `--max-volatility` | – | Maximum annualized portfolio volatility, e.g. `0.15` |
-| `--target-return` | – | Annualized return to reach; the rest is held in cash |
-| `--budget` | – | Amount to invest; enables the risk simulation and position sizing |
-| `--simulations` | `10000` | Simulated paths in the risk simulation |
-| `--risk-distribution` | `student_t` | `student_t` or `bootstrap` |
-| `--student-t-df` | `5` | Degrees of freedom of the Student-t shocks |
-| `--fee-bps` | `0` | One-way trading cost in basis points |
-| `--validate` | off | Run the out-of-sample walk-forward backtest |
-| `--validate-window` | `252` | Observations required before the first rebalance |
-| `--validate-rebalance` | `monthly` | `monthly` or `quarterly` |
-| `--compare-estimators` | off | Walk-forward every estimator and compare the results |
+| `--min-avg-volume` | `5e+06` | Minimum average daily share volume |
+| `--analyst-views` | `off` | Use analyst price targets as Black-Litterman views. Off by default: consensus targets are optimistic and momentum-driven |
+| `--analyst-confidence` | `0.15` | How much of the analyst view is believed, from 0 to 1. A low value keeps the market equilibrium in charge (default: 0.15) |
+| `--budget` | `-` | Amount to invest. When given, the risk of the portfolio is simulated and the positions are sized into whole shares and board lots |
+| `--simulations` | `10000` | Number of simulated paths in the risk simulation (default: 10000) |
+| `--risk-distribution` | `student_t` | Distribution of the simulated returns: fat-tailed Student-t shocks or a resampling of the portfolio's own history (default: student_t) |
+| `--student-t-df` | `5` | Degrees of freedom of the Student-t shocks (default: 5) |
+| `--fee-bps` | `0` | One-way trading cost in basis points (default: 0) |
+| `--validate` | `off` | Run the out-of-sample walk-forward backtest and report it |
+| `--validate-window` | `252` | Observations required before the first rebalance of the validation run (default: 252) |
+| `--validate-rebalance` | `monthly` | Rebalance frequency of the validation run (default: monthly) |
+| `--compare-estimators` | `off` | Walk-forward every expected-return method and compare the results out of sample, so the choice is measured rather than assumed |
 
 After a run, double-click the generated
 `outputs/efficient_frontier_YYYYMMDD.html` to explore the frontier in your
