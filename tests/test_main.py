@@ -620,6 +620,49 @@ def test_a_refused_request_prints_a_clean_error_instead_of_a_traceback(tmp_path,
     assert "Traceback" not in captured.err
 
 
+def test_an_explicit_minimum_weight_beats_the_default_floor_of_a_fixed_holding(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        fixed_tickers=["AAA"],
+        min_weights={"AAA": 0.3},
+    )
+
+    assert result.constraints is not None
+    assert result.constraints.min_weights["AAA"] == pytest.approx(0.3)
+
+
+def test_a_fixed_holding_without_a_floor_gets_the_default_one(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        fixed_tickers=["AAA"],
+    )
+
+    assert result.constraints is not None
+    assert result.constraints.min_weights["AAA"] == pytest.approx(0.05)
+
+
 def test_a_minimum_weight_makes_the_stock_a_mandatory_holding(tmp_path) -> None:
     result = run_analysis(
         tickers=["AAA", "BBB", "CCC"],
