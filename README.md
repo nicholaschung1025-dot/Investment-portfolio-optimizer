@@ -19,12 +19,6 @@ self-contained HTML file you open by double-clicking.
 individually and the optimal Max-Sharpe (red star) and Min-Volatility (blue
 star) portfolios highlighted.*
 
-![Landing page](docs/landing_hero.png)
-
-*`index.html` is a self-contained landing page for the project: one file, no
-build step, no framework, and no dependency beyond the web font and the
-background clip.*
-
 ![Portfolio report](docs/portfolio_report.png)
 
 *Every run also produces a self-contained HTML report: the metrics, the
@@ -41,8 +35,6 @@ Everything runs from the terminal. There is no server and nothing to deploy.
 
 A run writes two files into `outputs/`: the chart on its own, and a report
 that puts the chart, the numbers and the positions together.
-
-The landing page needs nothing at all -- open `index.html` in a browser.
 
 ## License
 
@@ -146,8 +138,7 @@ Investment-portfolio-optimizer/
 │   └── portfolio_report_YYYYMMDD.html
 ├── docs/                     # README screenshots
 │   ├── efficient_frontier.png
-│   ├── portfolio_report.png
-│   └── landing_hero.png
+│   └── portfolio_report.png
 ├── src/
 │   ├── __init__.py
 │   ├── errors.py             # Shared exception hierarchy
@@ -189,7 +180,6 @@ Investment-portfolio-optimizer/
 │   ├── test_visualizer.py
 │   └── test_main.py
 ├── main.py                   # CLI entry point / pipeline orchestration
-├── index.html                # Self-contained landing page
 ├── requirements.txt
 ├── pytest.ini
 └── README.md
