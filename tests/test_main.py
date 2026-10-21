@@ -13,8 +13,21 @@ import pandas as pd
 import pytest
 
 from src.database import fetch_runs
-from src.errors import AllocationError
+from src.errors import AllocationError, OptimizationError
+from src.expected_returns import black_litterman_returns
 from main import AnalysisResult, build_parser, main, parse_min_weights, run_analysis
+
+
+def _fundamentals_payload(ticker: str) -> dict:
+    """Raw Yahoo Finance style payload with a market capitalization."""
+    caps = {"AAA": 1_000_000_000.0, "BBB": 3_000_000_000.0, "CCC": 2_000_000_000.0}
+    return {
+        "currentPrice": 100.0,
+        "marketCap": caps.get(ticker, 1_000_000_000.0),
+        "currency": "USD",
+        "averageVolume": 5_000_000,
+        "trailingAnnualDividendYield": 0.01,
+    }
 
 
 def _fake_downloader(tickers, start=None, end=None, **kwargs):
@@ -157,6 +170,89 @@ def test_run_analysis_reports_the_methods_it_used(tmp_path) -> None:
 
     assert result.covariance_method == "sample"
     assert result.expected_return_method == "historical_mean"
+
+
+def test_black_litterman_uses_market_capitalization_weights(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        expected_return_method="black_litterman",
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    assert result.expected_return_method == "black_litterman"
+    expected = black_litterman_returns(
+        result.covariance,
+        {"AAA": 0.2, "BBB": 0.6, "CCC": 0.4},
+        0.04,
+        market_risk_premium=0.05,
+        tau=0.05,
+    )
+    np.testing.assert_allclose(
+        result.expected_returns.to_numpy(), expected.to_numpy(), rtol=1e-9
+    )
+
+
+def test_hong_kong_market_caps_are_converted_before_weighting(tmp_path) -> None:
+    caps = {"AAA": 1_000_000_000.0, "0700.HK": 7_820_000_000.0}
+
+    def payloads(ticker: str) -> dict:
+        return {
+            "currentPrice": 100.0,
+            "marketCap": caps[ticker],
+            "currency": "HKD" if ticker.endswith(".HK") else "USD",
+        }
+
+    result = run_analysis(
+        tickers=["AAA", "0700.HK"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        expected_return_method="black_litterman",
+        fundamentals_fetcher=payloads,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    expected = black_litterman_returns(
+        result.covariance, {"AAA": 0.5, "0700.HK": 0.5}, 0.04, market_risk_premium=0.05
+    )
+    np.testing.assert_allclose(
+        result.expected_returns.to_numpy(), expected.to_numpy(), rtol=1e-9
+    )
+
+
+def test_black_litterman_without_market_caps_fails_clearly(tmp_path) -> None:
+    with pytest.raises(OptimizationError):
+        run_analysis(
+            tickers=["AAA", "BBB", "CCC"],
+            start="2021-01-01",
+            end="2022-06-01",
+            objective="max_sharpe",
+            risk_free_rate=0.04,
+            db_path=tmp_path / "portfolio_history.db",
+            output_dir=tmp_path / "outputs",
+            downloader=_fake_downloader,
+            n_portfolios=200,
+            seed=1,
+            expected_return_method="black_litterman",
+            fundamentals_fetcher=lambda ticker: {"currentPrice": 100.0},
+            fundamentals_cache=tmp_path / "fundamentals.json",
+        )
 
 
 def test_capm_expected_return_method_uses_the_market_index(tmp_path) -> None:

@@ -24,7 +24,25 @@ from src.covariance import CovarianceMethod, shrunk_covariance
 from src.data_fetcher import Downloader, PreparedPrices, fetch_close_prices, prepare_prices
 from src.database import RunRecord, save_run
 from src.errors import OptimizationError
-from src.expected_returns import ExpectedReturnMethod, capm_returns, historical_mean
+from src.expected_returns import (
+    ExpectedReturnMethod,
+    black_litterman_returns,
+    capm_returns,
+    historical_mean,
+)
+from src.fundamentals import (
+    DEFAULT_CACHE_PATH,
+    Fetcher,
+    FundamentalsCache,
+    fetch_fundamentals,
+    market_caps_in_usd,
+)
+from src.market import (
+    DEFAULT_USD_HKD,
+    FxRates,
+    MarketMetadata,
+    capitalization_weights,
+)
 from src.math_engine import compute_log_returns
 from src.optimizer import (
     Objective,
@@ -43,6 +61,8 @@ DEFAULT_OUTPUT_DIR = Path("outputs")
 DEFAULT_MARKET_INDEX = "^GSPC"
 DEFAULT_COVARIANCE_METHOD = "ledoit-wolf"
 DEFAULT_EXPECTED_RETURN_METHOD = "historical_mean"
+DEFAULT_MARKET_RISK_PREMIUM = 0.05
+DEFAULT_TAU = 0.05
 
 
 @dataclass
@@ -144,6 +164,46 @@ def _estimate_expected_returns(
     raise OptimizationError(f"unknown expected return method: {method!r}")
 
 
+def _black_litterman_expected_returns(
+    covariance: pd.DataFrame,
+    risk_free_rate: float,
+    market_risk_premium: float,
+    tau: float,
+    tickers: list[str],
+    fundamentals_fetcher: Fetcher | None,
+    fundamentals_cache: str | Path,
+    refresh_fundamentals: bool,
+    market_metadata: MarketMetadata,
+    fx_rates: FxRates,
+) -> pd.Series:
+    """Estimate expected returns with Black-Litterman.
+
+    The market portfolio is approximated by the capitalization-weighted
+    candidate universe, which needs the market capitalization of every
+    ticker.
+    """
+    fundamentals = fetch_fundamentals(
+        tickers,
+        cache=FundamentalsCache(fundamentals_cache),
+        fetcher=fundamentals_fetcher,
+        refresh=refresh_fundamentals,
+    )
+    caps = market_caps_in_usd(fundamentals, market_metadata, fx_rates)
+    if caps.empty:
+        raise OptimizationError(
+            "no market capitalizations are available, so the Black-Litterman market "
+            "portfolio cannot be built; refresh the fundamentals cache or check the tickers"
+        )
+    market_weights = capitalization_weights(caps)
+    return black_litterman_returns(
+        covariance,
+        market_weights,
+        risk_free_rate,
+        market_risk_premium=market_risk_premium,
+        tau=tau,
+    )
+
+
 def run_analysis(
     tickers: list[str],
     start: str,
@@ -158,6 +218,13 @@ def run_analysis(
     expected_return_method: ExpectedReturnMethod = DEFAULT_EXPECTED_RETURN_METHOD,
     covariance_method: CovarianceMethod = DEFAULT_COVARIANCE_METHOD,
     market_index: str = DEFAULT_MARKET_INDEX,
+    market_risk_premium: float = DEFAULT_MARKET_RISK_PREMIUM,
+    tau: float = DEFAULT_TAU,
+    fundamentals_cache: str | Path = DEFAULT_CACHE_PATH,
+    refresh_fundamentals: bool = False,
+    fundamentals_fetcher: Fetcher | None = None,
+    market_metadata: MarketMetadata | None = None,
+    usd_hkd: float = DEFAULT_USD_HKD,
     min_weights: dict[str, float] | None = None,
     max_weight: float | None = None,
     max_volatility: float | None = None,
@@ -182,6 +249,15 @@ def run_analysis(
         expected_return_method: How the expected returns are estimated.
         covariance_method: How the covariance matrix is estimated.
         market_index: Market index used by the CAPM estimator.
+        market_risk_premium: Market risk premium used by the Black-Litterman
+            equilibrium returns.
+        tau: Uncertainty of the Black-Litterman prior.
+        fundamentals_cache: Where the raw fundamentals are cached.
+        refresh_fundamentals: Whether to ignore the fundamentals cache.
+        fundamentals_fetcher: Callable returning a raw fundamentals payload;
+            injected in tests so nothing ever touches the network.
+        market_metadata: Market metadata, used for currencies and board lots.
+        usd_hkd: Hong Kong dollars per US dollar.
         min_weights: Minimum weight per ticker, for mandatory holdings.
         max_weight: Maximum weight for any single ticker.
         max_volatility: Maximum annualized portfolio volatility.
@@ -199,16 +275,31 @@ def run_analysis(
     prepared = prepare_prices(raw_prices)
 
     log_returns = compute_log_returns(prepared.prices)
-    expected_returns = _estimate_expected_returns(
-        expected_return_method,
-        log_returns,
-        risk_free_rate,
-        market_index,
-        start,
-        end,
-        downloader,
-    )
     covariance = shrunk_covariance(log_returns, method=covariance_method)
+
+    if expected_return_method == "black_litterman":
+        expected_returns = _black_litterman_expected_returns(
+            covariance=covariance,
+            risk_free_rate=risk_free_rate,
+            market_risk_premium=market_risk_premium,
+            tau=tau,
+            tickers=list(log_returns.columns),
+            fundamentals_fetcher=fundamentals_fetcher,
+            fundamentals_cache=fundamentals_cache,
+            refresh_fundamentals=refresh_fundamentals,
+            market_metadata=market_metadata or MarketMetadata(),
+            fx_rates=FxRates.default(usd_hkd),
+        )
+    else:
+        expected_returns = _estimate_expected_returns(
+            expected_return_method,
+            log_returns,
+            risk_free_rate,
+            market_index,
+            start,
+            end,
+            downloader,
+        )
 
     constraints = WeightConstraints(
         min_weights=dict(min_weights or {}),
@@ -345,11 +436,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-return-method",
-        choices=["historical_mean", "capm"],
+        choices=["historical_mean", "capm", "black_litterman"],
         default=DEFAULT_EXPECTED_RETURN_METHOD,
         help=(
             "How expected returns are estimated: the sample mean of log returns, "
-            "or the capital asset pricing model (default: historical_mean)"
+            "the capital asset pricing model, or a Black-Litterman posterior "
+            "built from market capitalizations (default: historical_mean)"
         ),
     )
     parser.add_argument(
@@ -366,6 +458,47 @@ def build_parser() -> argparse.ArgumentParser:
         "--market-index",
         default=DEFAULT_MARKET_INDEX,
         help=f"Market index used by the CAPM estimator (default: {DEFAULT_MARKET_INDEX})",
+    )
+    parser.add_argument(
+        "--market-risk-premium",
+        type=float,
+        default=DEFAULT_MARKET_RISK_PREMIUM,
+        help=(
+            "Market risk premium used to scale the Black-Litterman equilibrium "
+            f"returns (default: {DEFAULT_MARKET_RISK_PREMIUM})"
+        ),
+    )
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=DEFAULT_TAU,
+        help=f"Uncertainty of the Black-Litterman prior (default: {DEFAULT_TAU})",
+    )
+    parser.add_argument(
+        "--fundamentals-cache",
+        type=Path,
+        default=DEFAULT_CACHE_PATH,
+        help=f"Where raw fundamentals are cached (default: {DEFAULT_CACHE_PATH})",
+    )
+    parser.add_argument(
+        "--refresh-fundamentals",
+        action="store_true",
+        help="Ignore the fundamentals cache and fetch everything again",
+    )
+    parser.add_argument(
+        "--market-meta",
+        type=Path,
+        default=None,
+        help=(
+            "CSV file with ticker, currency, board_lot and market columns that "
+            "overrides the built-in market metadata"
+        ),
+    )
+    parser.add_argument(
+        "--usd-hkd",
+        type=float,
+        default=DEFAULT_USD_HKD,
+        help=f"Hong Kong dollars per US dollar (default: {DEFAULT_USD_HKD})",
     )
     parser.add_argument(
         "--min-weight",
@@ -541,6 +674,10 @@ def main(argv: Sequence[str] | None = None, downloader: Downloader | None = None
     except ValueError as error:
         parser.error(str(error))
 
+    market_metadata = (
+        MarketMetadata.from_csv(args.market_meta) if args.market_meta else MarketMetadata()
+    )
+
     result = run_analysis(
         tickers=tickers,
         start=args.start,
@@ -554,6 +691,12 @@ def main(argv: Sequence[str] | None = None, downloader: Downloader | None = None
         expected_return_method=args.expected_return_method,
         covariance_method=args.covariance_method,
         market_index=args.market_index,
+        market_risk_premium=args.market_risk_premium,
+        tau=args.tau,
+        fundamentals_cache=args.fundamentals_cache,
+        refresh_fundamentals=args.refresh_fundamentals,
+        market_metadata=market_metadata,
+        usd_hkd=args.usd_hkd,
         min_weights=min_weights,
         max_weight=args.max_weight,
         max_volatility=args.max_volatility,
