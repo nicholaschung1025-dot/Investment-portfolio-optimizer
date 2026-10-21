@@ -36,6 +36,14 @@ star) portfolios highlighted.*
 - **Measured, not assumed** — `--compare-estimators` walks every estimator
   forward out of sample and reports them side by side, so the choice of
   estimator is an empirical question rather than a matter of taste.
+- **Quality filters** — companies that are too small, too thinly traded, too
+  volatile or too poorly covered are excluded before the optimizer sees them,
+  and the reason for every exclusion is reported. A missing field is not a
+  failed field, so a company Yahoo Finance has no data for is not dropped by
+  accident.
+- **Analyst views, off by default** — consensus price targets can be used as
+  Black-Litterman views, with a confidence you choose. Measured out of sample
+  they did not improve the risk-adjusted return, so they stay opt-in.
 - **Portfolio selection with mandatory holdings** — name the positions that must
   be in the portfolio and how many names to hold; a beam search finds the
   best subset and is checked against an exhaustive enumeration. A mandatory
@@ -116,6 +124,8 @@ mean_variance_optimizer/
 │   ├── market.py             # Listing currency, board lot, FX, market weights
 │   ├── fundamentals.py       # Company fundamentals with an on-disk cache
 │   ├── selection.py          # Portfolio selection with mandatory holdings
+│   ├── analyst.py            # Analyst price targets as Black-Litterman views
+│   ├── filters.py            # Quality rules for the candidate universe
 │   ├── risk.py               # Tail risk: VaR, expected shortfall, profit odds
 │   ├── sizing.py             # Whole shares, board lots, leftover cash
 │   ├── database.py           # Local SQLite persistence, migrated in place
@@ -131,6 +141,7 @@ mean_variance_optimizer/
 │   ├── test_market.py
 │   ├── test_fundamentals.py
 │   ├── test_selection.py
+│   ├── test_analyst.py
 │   ├── test_risk.py
 │   ├── test_sizing.py
 │   ├── test_data_fetcher.py
@@ -225,6 +236,14 @@ Or just run it with no arguments for a sensible default universe:
 | `--fixed` | – | A holding that must be in the portfolio; repeatable |
 | `--max-k` | `0` | Maximum number of assets to hold; 0 keeps the whole universe |
 | `--selection-beam` | `5` | Partial selections the search keeps per step |
+| `--quality-filters` | off | Exclude companies that fail the quality rules |
+| `--min-analyst-count` | `10` | Minimum analyst coverage |
+| `--min-market-cap-usd` | `10000000000` | Minimum market cap for US listings |
+| `--min-market-cap-hkd` | `80000000000` | Minimum market cap for Hong Kong listings |
+| `--filter-max-volatility` | `0.5` | Maximum annualized volatility of a candidate |
+| `--min-avg-volume` | `5000000` | Minimum average daily share volume |
+| `--analyst-views` | off | Use analyst price targets as Black-Litterman views |
+| `--analyst-confidence` | `0.15` | How much of the analyst view is believed |
 | `--max-weight` | – | Maximum weight for any single ticker, e.g. `0.35` |
 | `--max-volatility` | – | Maximum annualized portfolio volatility, e.g. `0.15` |
 | `--target-return` | – | Annualized return to reach; the rest is held in cash |
@@ -338,6 +357,18 @@ The Black-Litterman rows use today's market capitalizations for every
 historical period, so their backtest is mildly optimistic. The other two
 rows are not.
 
+Analyst price targets, used as Black-Litterman views with a confidence of
+0.15, made the risk-adjusted result **worse** in all three runs (Sharpe
+2.07 -> 1.76, 1.43 -> 1.35, 1.06 -> 0.89). Consensus targets are
+optimistic and follow momentum, and the portfolio pays for chasing them.
+They are therefore opt-in.
+
+One caveat on all of these numbers: the optimizer is deterministic, but the
+data source is not perfectly so. Yahoo Finance occasionally serves slightly
+different adjusted prices or a shorter history, which moves the reported
+figures by a percent or two. Re-run the comparison to see the numbers for
+the data you actually got.
+
 ### Covariance Estimation
 
 ```python
@@ -419,7 +450,13 @@ no test ever downloads data.
 - The risk simulation assumes the portfolio's behaviour over the next year
   resembles its history; it is a description of the shape of the risk, not a
   forecast.
-- Prices come from a free, unofficial data source and can be wrong.
+- Prices come from a free, unofficial data source and can be wrong. It is
+  also not perfectly stable between calls, so two runs a day apart may report
+  slightly different figures.
+- The quality rules are opinionated and only apply when `--quality-filters` is
+  given: the default thresholds exclude a lot of perfectly good companies.
+- Analyst price targets are consensus expectations, which are optimistic and
+  momentum-driven. They are available as views but off by default.
 
 ## Notes
 

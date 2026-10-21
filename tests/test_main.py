@@ -323,6 +323,113 @@ def test_the_report_shows_the_risk_metrics_and_the_positions(tmp_path, capsys) -
     assert "Positions" in captured.out
 
 
+def test_quality_filters_exclude_a_small_company(tmp_path) -> None:
+    def payloads(ticker: str) -> dict:
+        caps = {"AAA": 500e9, "BBB": 1e9, "CCC": 200e9}
+        return {
+            "currentPrice": 100.0,
+            "marketCap": caps[ticker],
+            "currency": "USD",
+            "averageVolume": 20_000_000,
+            "numberOfAnalystOpinions": 20,
+            "trailingAnnualDividendYield": 0.01,
+        }
+
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=payloads,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        quality_filters=True,
+    )
+
+    assert "BBB" not in result.expected_returns.index
+    assert any("BBB" in warning for warning in result.warnings)
+
+
+def test_the_analyst_view_moves_the_expected_return_towards_the_target(tmp_path) -> None:
+    def payloads(ticker: str) -> dict:
+        return {
+            "currentPrice": 100.0,
+            "marketCap": 100e9,
+            "currency": "USD",
+            "averageVolume": 20_000_000,
+            "numberOfAnalystOpinions": 20,
+            "targetMeanPrice": 200.0,
+            "trailingAnnualDividendYield": 0.0,
+        }
+
+    without_views = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=payloads,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+    with_views = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=payloads,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+        analyst_views=True,
+    )
+
+    prior = without_views.expected_returns["AAA"]
+    with_view = with_views.expected_returns["AAA"]
+    assert with_view > prior
+    assert with_view < 1.01
+
+
+def test_the_analyst_views_are_off_by_default(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=tmp_path / "outputs",
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_fundamentals_payload,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    expected = black_litterman_returns(
+        result.covariance,
+        {"AAA": 0.2, "BBB": 0.6, "CCC": 0.4},
+        0.04,
+        market_risk_premium=0.05,
+    )
+    np.testing.assert_allclose(
+        result.expected_returns.to_numpy(), expected.to_numpy(), rtol=1e-9
+    )
+
+
 def test_fixed_holdings_are_applied_and_reported(tmp_path) -> None:
     result = run_analysis(
         tickers=["AAA", "BBB", "CCC"],

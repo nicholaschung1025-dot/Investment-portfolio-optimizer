@@ -18,18 +18,20 @@ from typing import Sequence
 
 import pandas as pd
 
+from src.analyst import analyst_views as build_analyst_views
 from src.allocation import AllocationResult, allocate_to_target_return
 from src.constraints import WeightConstraints
 from src.covariance import CovarianceMethod, shrunk_covariance
 from src.data_fetcher import Downloader, PreparedPrices, fetch_close_prices, prepare_prices
 from src.database import RunRecord, save_run
-from src.errors import OptimizationError
+from src.errors import ConstraintError, OptimizationError
 from src.expected_returns import (
     ExpectedReturnMethod,
     black_litterman_returns,
     capm_returns,
     historical_mean,
 )
+from src.filters import QualityRules, apply_quality_filters
 from src.fundamentals import (
     DEFAULT_CACHE_PATH,
     Fetcher,
@@ -53,7 +55,12 @@ from src.optimizer import (
 from src.risk import RiskSimulation, simulate_risk
 from src.selection import DEFAULT_FIXED_WEIGHT, SelectionResult, select_portfolio
 from src.sizing import PositionPlan, size_positions
-from src.validation import BacktestResult, compare_expected_return_methods, walk_forward_backtest
+from src.validation import (
+    BacktestResult,
+    Estimator,
+    compare_expected_return_methods,
+    walk_forward_backtest,
+)
 from src.visualizer import generate_efficient_frontier
 
 DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
@@ -158,41 +165,24 @@ def _market_log_returns(
     return market_log_returns.iloc[:, 0]
 
 
-def _estimate_expected_returns(
-    method: ExpectedReturnMethod,
-    log_returns: pd.DataFrame,
-    risk_free_rate: float,
-    market_index: str,
-    start: str,
-    end: str,
-    downloader: Downloader | None,
-) -> pd.Series:
-    """Estimate the expected returns with the requested method."""
-    if method == "historical_mean":
-        return historical_mean(log_returns)
-    if method == "capm":
-        market_returns = _market_log_returns(market_index, start, end, downloader)
-        return capm_returns(log_returns, market_returns, risk_free_rate)
-    raise OptimizationError(f"unknown expected return method: {method!r}")
-
-
-def _black_litterman_expected_returns(
-    covariance: pd.DataFrame,
-    risk_free_rate: float,
-    market_risk_premium: float,
-    tau: float,
+def _black_litterman_inputs(
     tickers: list[str],
+    covariance: pd.DataFrame,
     fundamentals_fetcher: Fetcher | None,
     fundamentals_cache: str | Path,
     refresh_fundamentals: bool,
     market_metadata: MarketMetadata,
     fx_rates: FxRates,
-) -> pd.Series:
-    """Estimate expected returns with Black-Litterman.
+    risk_free_rate: float,
+    market_risk_premium: float,
+    use_analyst_views: bool,
+    analyst_confidence: float,
+) -> tuple[pd.Series, dict[str, float] | None, dict[str, float] | None]:
+    """Return the market weights and the optional analyst views.
 
     The market portfolio is approximated by the capitalization-weighted
     candidate universe, which needs the market capitalization of every
-    ticker.
+    ticker. Analyst price targets can be added as absolute views.
     """
     fundamentals = fetch_fundamentals(
         tickers,
@@ -206,14 +196,72 @@ def _black_litterman_expected_returns(
             "no market capitalizations are available, so the Black-Litterman market "
             "portfolio cannot be built; refresh the fundamentals cache or check the tickers"
         )
-    market_weights = capitalization_weights(caps)
-    return black_litterman_returns(
-        covariance,
-        market_weights,
-        risk_free_rate,
-        market_risk_premium=market_risk_premium,
-        tau=tau,
-    )
+    weights = capitalization_weights(caps)
+
+    views: dict[str, float] | None = None
+    confidences: dict[str, float] | None = None
+    if use_analyst_views:
+        prices = {
+            ticker: entry.price
+            for ticker, entry in fundamentals.items()
+            if entry.available and entry.price is not None
+        }
+        prior = risk_free_rate + market_risk_premium * (
+            covariance.to_numpy(dtype=float) @ weights.to_numpy()
+        )
+        views = build_analyst_views(
+            fundamentals, prices, prior=pd.Series(prior, index=list(covariance.index))
+        )
+        if views:
+            confidences = {ticker: analyst_confidence for ticker in views}
+    return weights, views, confidences
+
+
+def _make_estimator(
+    method: str,
+    covariance_method: CovarianceMethod,
+    risk_free_rate: float,
+    market_returns: pd.Series | None = None,
+    market_weights: pd.Series | None = None,
+    market_risk_premium: float = 0.05,
+    tau: float = 0.05,
+    views: dict[str, float] | None = None,
+    view_confidences: dict[str, float] | None = None,
+) -> Estimator:
+    """Return a callable that estimates expected returns and a covariance matrix.
+
+    The same estimator feeds the headline portfolio, the walk-forward
+    validation and the method comparison, so all three agree on what the
+    expected returns were.
+    """
+
+    def estimate(train: pd.DataFrame) -> tuple[pd.Series, pd.DataFrame]:
+        covariance = shrunk_covariance(train, method=covariance_method)
+        if method == "historical_mean":
+            expected = historical_mean(train)
+        elif method == "capm":
+            if market_returns is None:
+                raise OptimizationError("the CAPM estimator needs a market index")
+            expected = capm_returns(train, market_returns, risk_free_rate)
+        elif method == "black_litterman":
+            if market_weights is None:
+                raise OptimizationError(
+                    "the Black-Litterman estimator needs market capitalizations"
+                )
+            expected = black_litterman_returns(
+                covariance,
+                market_weights,
+                risk_free_rate,
+                market_risk_premium=market_risk_premium,
+                tau=tau,
+                views=views,
+                view_confidences=view_confidences,
+            )
+        else:
+            raise OptimizationError(f"unknown expected return method: {method!r}")
+        return expected, covariance
+
+    return estimate
 
 
 def run_analysis(
@@ -243,6 +291,10 @@ def run_analysis(
     fixed_tickers: Sequence[str] | None = None,
     max_k: int = 0,
     selection_beam: int = 5,
+    quality_filters: bool = False,
+    quality_rules: QualityRules | None = None,
+    analyst_views: bool = False,
+    analyst_confidence: float = 0.15,
     target_return: float | None = None,
     budget: float | None = None,
     simulations: int = 10000,
@@ -288,6 +340,13 @@ def run_analysis(
             universe.
         selection_beam: How many partial selections the search keeps per
             step.
+        quality_filters: Whether to exclude companies that fail the quality
+            rules before optimizing.
+        quality_rules: The rules to apply when the filters are enabled.
+        analyst_views: Whether analyst price targets are used as Black-Litterman
+            views.
+        analyst_confidence: How much of the analyst view is believed, from 0
+            (not at all) to 1 (completely).
         target_return: Return the portfolio should reach; the remainder is
             held in the risk-free asset.
         budget: Amount to invest. When given, the risk of the portfolio is
@@ -316,41 +375,54 @@ def run_analysis(
 
     warnings = list(prepared.warnings)
     effective_method = expected_return_method
+    metadata = market_metadata or MarketMetadata()
+    fx_rates = FxRates.default(usd_hkd)
+
+    market_returns: pd.Series | None = None
+    market_weights: pd.Series | None = None
+    views: dict[str, float] | None = None
+    view_confidences: dict[str, float] | None = None
 
     if expected_return_method in ("black_litterman", "auto"):
         try:
-            expected_returns = _black_litterman_expected_returns(
-                covariance=covariance,
-                risk_free_rate=risk_free_rate,
-                market_risk_premium=market_risk_premium,
-                tau=tau,
-                tickers=list(log_returns.columns),
-                fundamentals_fetcher=fundamentals_fetcher,
-                fundamentals_cache=fundamentals_cache,
-                refresh_fundamentals=refresh_fundamentals,
-                market_metadata=market_metadata or MarketMetadata(),
-                fx_rates=FxRates.default(usd_hkd),
+            market_weights, views, view_confidences = _black_litterman_inputs(
+                list(log_returns.columns),
+                covariance,
+                fundamentals_fetcher,
+                fundamentals_cache,
+                refresh_fundamentals,
+                metadata,
+                fx_rates,
+                risk_free_rate,
+                market_risk_premium,
+                analyst_views,
+                analyst_confidence,
             )
             effective_method = "black_litterman"
         except OptimizationError:
             if expected_return_method == "black_litterman":
                 raise
-            expected_returns = historical_mean(log_returns)
             effective_method = "historical_mean"
             warnings.append(
                 "no market capitalizations were available, so the expected returns "
                 "fell back to the historical mean"
             )
-    else:
-        expected_returns = _estimate_expected_returns(
-            expected_return_method,
-            log_returns,
-            risk_free_rate,
-            market_index,
-            start,
-            end,
-            downloader,
-        )
+
+    if effective_method == "capm":
+        market_returns = _market_log_returns(market_index, start, end, downloader)
+
+    estimator = _make_estimator(
+        effective_method,
+        covariance_method,
+        risk_free_rate,
+        market_returns=market_returns,
+        market_weights=market_weights,
+        market_risk_premium=market_risk_premium,
+        tau=tau,
+        views=views,
+        view_confidences=view_confidences,
+    )
+    expected_returns, covariance = estimator(log_returns)
 
     fixed = list(dict.fromkeys(fixed_tickers or []))
     effective_min_weights = dict(min_weights or {})
@@ -361,6 +433,46 @@ def run_analysis(
         max_weight=max_weight,
         max_volatility=max_volatility,
     )
+
+    if quality_filters:
+        rules = quality_rules if quality_rules is not None else QualityRules()
+        fundamentals = fetch_fundamentals(
+            list(expected_returns.index),
+            cache=FundamentalsCache(fundamentals_cache),
+            fetcher=fundamentals_fetcher,
+            refresh=refresh_fundamentals,
+        )
+        volatilities = pd.Series(
+            {
+                ticker: float(covariance.loc[ticker, ticker]) ** 0.5
+                for ticker in expected_returns.index
+            }
+        )
+        filter_result = apply_quality_filters(
+            list(expected_returns.index),
+            fundamentals,
+            expected_returns,
+            volatilities,
+            rules,
+            market_metadata or MarketMetadata(),
+        )
+        for ticker, reasons in filter_result.dropped:
+            warnings.append(
+                f"{ticker} excluded by the quality filters: {'; '.join(reasons)}"
+            )
+        kept = [ticker for ticker in expected_returns.index if ticker in filter_result.kept]
+        for ticker in fixed:
+            if ticker not in kept:
+                raise ConstraintError(
+                    f"the mandatory holding {ticker!r} does not pass the quality filters"
+                )
+        if not kept:
+            raise ConstraintError(
+                "every ticker was excluded by the quality filters; loosen the rules "
+                "or widen the universe"
+            )
+        expected_returns = expected_returns[kept]
+        covariance = covariance.loc[kept, kept]
 
     selection = None
     if max_k and max_k < len(expected_returns.index):
@@ -486,6 +598,7 @@ def run_analysis(
             initial_window=validate_window,
             rebalance=validate_rebalance,
             constraints=constraints,
+            estimator=estimator,
         )
 
     comparison = None
@@ -495,51 +608,43 @@ def run_analysis(
             "capm",
             "black_litterman",
         ]
-        metadata = market_metadata or MarketMetadata()
-        fx_rates = FxRates.default(usd_hkd)
-
-        market_returns = (
+        comparison_market_returns = (
             _market_log_returns(market_index, start, end, downloader)
             if "capm" in methods
             else None
         )
-        market_weights = None
+        comparison_market_weights = None
+        comparison_views = None
+        comparison_confidences = None
         if "black_litterman" in methods:
-            fundamentals = fetch_fundamentals(
-                list(log_returns.columns),
-                cache=FundamentalsCache(fundamentals_cache),
-                fetcher=fundamentals_fetcher,
-                refresh=refresh_fundamentals,
+            comparison_market_weights, comparison_views, comparison_confidences = (
+                _black_litterman_inputs(
+                    list(log_returns.columns),
+                    covariance,
+                    fundamentals_fetcher,
+                    fundamentals_cache,
+                    refresh_fundamentals,
+                    metadata,
+                    fx_rates,
+                    risk_free_rate,
+                    market_risk_premium,
+                    analyst_views,
+                    analyst_confidence,
+                )
             )
-            caps = market_caps_in_usd(fundamentals, metadata, fx_rates)
-            market_weights = capitalization_weights(caps) if not caps.empty else None
 
-        def estimator_factory(method: str):
-            def estimate(log_returns: pd.DataFrame) -> tuple[pd.Series, pd.DataFrame]:
-                covariance = shrunk_covariance(log_returns, method=covariance_method)
-                if method == "historical_mean":
-                    expected = historical_mean(log_returns)
-                elif method == "capm":
-                    if market_returns is None:
-                        raise OptimizationError("the CAPM estimator needs a market index")
-                    expected = capm_returns(log_returns, market_returns, risk_free_rate)
-                elif method == "black_litterman":
-                    if market_weights is None:
-                        raise OptimizationError(
-                            "the Black-Litterman estimator needs market capitalizations"
-                        )
-                    expected = black_litterman_returns(
-                        covariance,
-                        market_weights,
-                        risk_free_rate,
-                        market_risk_premium=market_risk_premium,
-                        tau=tau,
-                    )
-                else:
-                    raise OptimizationError(f"unknown expected return method: {method!r}")
-                return expected, covariance
-
-            return estimate
+        def estimator_factory(method: str) -> Estimator:
+            return _make_estimator(
+                method,
+                covariance_method,
+                risk_free_rate,
+                market_returns=comparison_market_returns,
+                market_weights=comparison_market_weights,
+                market_risk_premium=market_risk_premium,
+                tau=tau,
+                views=comparison_views,
+                view_confidences=comparison_confidences,
+            )
 
         comparison = compare_expected_return_methods(
             prepared.prices,
@@ -750,6 +855,61 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Annualized return the portfolio should reach. The remainder is held "
             "in the risk-free asset (default: fully invested)"
+        ),
+    )
+    parser.add_argument(
+        "--quality-filters",
+        action="store_true",
+        help=(
+            "Exclude companies that fail the quality rules -- too small, too "
+            "thinly traded, too volatile or too poorly covered -- before optimizing"
+        ),
+    )
+    parser.add_argument(
+        "--min-analyst-count",
+        type=int,
+        default=QualityRules().min_analyst_count,
+        help=f"Minimum analyst coverage (default: {QualityRules().min_analyst_count})",
+    )
+    parser.add_argument(
+        "--min-market-cap-usd",
+        type=float,
+        default=QualityRules().min_market_cap_usd,
+        help="Minimum market capitalization for US listings, in US dollars",
+    )
+    parser.add_argument(
+        "--min-market-cap-hkd",
+        type=float,
+        default=QualityRules().min_market_cap_hkd,
+        help="Minimum market capitalization for Hong Kong listings, in Hong Kong dollars",
+    )
+    parser.add_argument(
+        "--filter-max-volatility",
+        type=float,
+        default=QualityRules().max_annual_volatility,
+        help="Maximum annualized volatility of a candidate",
+    )
+    parser.add_argument(
+        "--min-avg-volume",
+        type=float,
+        default=QualityRules().min_avg_volume,
+        help="Minimum average daily share volume",
+    )
+    parser.add_argument(
+        "--analyst-views",
+        action="store_true",
+        help=(
+            "Use analyst price targets as Black-Litterman views. Off by default: "
+            "consensus targets are optimistic and momentum-driven"
+        ),
+    )
+    parser.add_argument(
+        "--analyst-confidence",
+        type=float,
+        default=0.15,
+        help=(
+            "How much of the analyst view is believed, from 0 to 1. A low value "
+            "keeps the market equilibrium in charge (default: 0.15)"
         ),
     )
     parser.add_argument(
@@ -1039,6 +1199,16 @@ def main(
         fixed_tickers=args.fixed,
         max_k=args.max_k,
         selection_beam=args.selection_beam,
+        quality_filters=args.quality_filters,
+        quality_rules=QualityRules(
+            min_analyst_count=args.min_analyst_count,
+            min_market_cap_usd=args.min_market_cap_usd,
+            min_market_cap_hkd=args.min_market_cap_hkd,
+            max_annual_volatility=args.filter_max_volatility,
+            min_avg_volume=args.min_avg_volume,
+        ),
+        analyst_views=args.analyst_views,
+        analyst_confidence=args.analyst_confidence,
         target_return=args.target_return,
         budget=args.budget,
         simulations=args.simulations,
