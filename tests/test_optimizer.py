@@ -111,6 +111,15 @@ def test_monte_carlo_frontier_is_reproducible_with_seed() -> None:
     pd.testing.assert_frame_equal(first, second)
 
 
+def test_max_sharpe_is_at_least_as_good_as_a_large_random_sample() -> None:
+    expected_returns, covariance = _inputs()
+
+    best = optimize_portfolio(expected_returns, covariance, "max_sharpe", risk_free_rate=0.04)
+    cloud = monte_carlo_frontier(expected_returns, covariance, n_portfolios=5000, seed=3)
+
+    assert best.sharpe_ratio >= cloud["sharpe"].max() - 1e-6
+
+
 def _performance(weights: np.ndarray, expected_returns: pd.Series, covariance: pd.DataFrame):
     from src.math_engine import portfolio_performance
 
