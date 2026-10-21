@@ -16,7 +16,11 @@ import pytest
 from src.errors import OptimizationError
 from src.math_engine import compute_log_returns
 from src.optimizer import optimize_portfolio
-from src.validation import compute_performance, walk_forward_backtest
+from src.validation import (
+    compare_expected_return_methods,
+    compute_performance,
+    walk_forward_backtest,
+)
 
 
 def _prices(periods: int = 750, seed: int = 7) -> pd.DataFrame:
@@ -155,3 +159,46 @@ def test_compute_performance_reports_the_maximum_drawdown() -> None:
     expected_drawdown = float((equity / equity.cummax() - 1.0).min())
 
     assert metrics.max_drawdown == pytest.approx(expected_drawdown)
+
+
+def test_compare_expected_return_methods_reports_one_row_per_method() -> None:
+    prices = _prices()
+
+    def factory(method: str):
+        def estimate(log_returns: pd.DataFrame):
+            return log_returns.mean() * 252, log_returns.cov() * 252
+
+        return estimate
+
+    table = compare_expected_return_methods(
+        prices, ["historical_mean", "capm"], factory, initial_window=300
+    )
+
+    assert list(table["method"]) == ["historical_mean", "capm"]
+    assert {
+        "optimized_cagr",
+        "optimized_sharpe",
+        "optimized_max_drawdown",
+        "benchmark_cagr",
+        "benchmark_sharpe",
+        "turnover",
+    }.issubset(table.columns)
+
+
+def test_compare_expected_return_methods_runs_each_method_out_of_sample() -> None:
+    prices = _prices()
+    used: list[str] = []
+
+    def factory(method: str):
+        def estimate(log_returns: pd.DataFrame):
+            used.append(method)
+            return log_returns.mean() * 252, log_returns.cov() * 252
+
+        return estimate
+
+    table = compare_expected_return_methods(
+        prices, ["historical_mean", "capm"], factory, initial_window=300
+    )
+
+    assert set(used) == {"historical_mean", "capm"}
+    assert table["optimized_cagr"].notna().all()

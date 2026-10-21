@@ -11,7 +11,7 @@ at, so no future information can leak into the estimate.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -275,3 +275,60 @@ def walk_forward_backtest(
         average_turnover=float(np.mean(turnovers)) if turnovers else 0.0,
         rebalance_count=len(optimized_returns),
     )
+
+
+def compare_expected_return_methods(
+    prices: pd.DataFrame,
+    methods: Sequence[str],
+    estimator_factory: Callable[[str], Estimator],
+    objective: Objective = "max_sharpe",
+    risk_free_rate: float = 0.04,
+    covariance_method: CovarianceMethod = "ledoit-wolf",
+    initial_window: int = 252,
+    rebalance: str = "monthly",
+    constraints: WeightConstraints | None = None,
+) -> pd.DataFrame:
+    """Walk-forward every expected-return method and compare the results.
+
+    Which estimator is worth using is an empirical question, so the answer
+    should be measured rather than assumed. Every method is run over the
+    same periods and reported next to the equal-weight benchmark.
+
+    Args:
+        prices: Daily adjusted close prices, one column per ticker.
+        methods: Names of the methods to compare.
+        estimator_factory: Callable returning the estimator for a method.
+        objective: ``"max_sharpe"`` or ``"min_vol"``.
+        risk_free_rate: Annualized risk-free rate.
+        covariance_method: How the covariance matrix is estimated.
+        initial_window: Observations required before the first rebalance.
+        rebalance: ``"monthly"`` or ``"quarterly"``.
+        constraints: Optional limits applied to every rebalance.
+
+    Returns:
+        One row per method, with its out-of-sample metrics.
+    """
+    rows: list[dict[str, object]] = []
+    for method in methods:
+        result = walk_forward_backtest(
+            prices,
+            objective=objective,
+            risk_free_rate=risk_free_rate,
+            covariance_method=covariance_method,
+            initial_window=initial_window,
+            rebalance=rebalance,
+            constraints=constraints,
+            estimator=estimator_factory(method),
+        )
+        rows.append(
+            {
+                "method": method,
+                "optimized_cagr": result.optimized.cagr,
+                "optimized_sharpe": result.optimized.sharpe_ratio,
+                "optimized_max_drawdown": result.optimized.max_drawdown,
+                "benchmark_cagr": result.benchmark.cagr,
+                "benchmark_sharpe": result.benchmark.sharpe_ratio,
+                "turnover": result.average_turnover,
+            }
+        )
+    return pd.DataFrame(rows)
