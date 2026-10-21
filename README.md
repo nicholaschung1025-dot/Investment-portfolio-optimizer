@@ -462,6 +462,8 @@ no test ever downloads data.
 | Solver fails to converge | Raises `OptimizationError` |
 | Minimum weights that cannot be invested | Raises `ConstraintError` |
 | Maximum weight too small to invest fully | Raises `ConstraintError` |
+| Maximum weight too small for the number of slots | Raises `ConstraintError`, naming the number of assets needed |
+| More mandatory holdings than slots | Raises `ConstraintError` |
 | Volatility cap that cannot be met | Raises `OptimizationError` |
 | Target return above the tangency return | Raises `AllocationError` |
 | Target return below the risk-free rate | Raises `AllocationError` |

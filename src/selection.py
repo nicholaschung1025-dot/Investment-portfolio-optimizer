@@ -219,6 +219,7 @@ def select_portfolio(
     beam: list[tuple[str, ...]] = [tuple(fixed)]
     best_result: OptimizationResult | None = None
     best_subset: tuple[str, ...] = tuple(fixed)
+    previous_subset: tuple[str, ...] = tuple(fixed)
     steps: list[dict[str, object]] = []
 
     for _ in range(len(fixed), keep):
@@ -252,13 +253,20 @@ def select_portfolio(
         score, subset, candidate_result = expansions[0]
         best_result = candidate_result
         best_subset = subset
+        # The best portfolio at this step does not have to build on the best
+        # one at the previous step -- the search is allowed to switch branch
+        # -- so the change is reported as what it is.
+        added = [ticker for ticker in subset if ticker not in previous_subset]
+        removed = [ticker for ticker in previous_subset if ticker not in subset]
         steps.append(
             {
-                "added": subset[-1],
+                "added": added,
+                "removed": removed,
                 "score": score,
                 "portfolio": list(subset),
             }
         )
+        previous_subset = subset
 
     if best_result is None:
         raise ConstraintError(

@@ -155,6 +155,26 @@ def test_mandatory_holdings_that_already_fill_the_portfolio_are_kept() -> None:
     assert result.weights["AAA"] >= 0.2 - 1e-6
 
 
+def test_the_step_log_reports_what_actually_changed() -> None:
+    expected_returns, covariance = _inputs()
+
+    result = select_portfolio(
+        expected_returns,
+        covariance,
+        ["FIXED"],
+        max_k=3,
+        constraints=WeightConstraints(min_weights={"FIXED": 0.1}),
+    )
+
+    assert result.steps
+    for step in result.steps:
+        assert step["added"], "a step must change the portfolio"
+        for ticker in step["added"]:
+            assert ticker in step["portfolio"]
+        for ticker in step["removed"]:
+            assert ticker not in step["portfolio"]
+
+
 def test_a_maximum_weight_that_needs_more_slots_still_selects() -> None:
     expected_returns, covariance = _inputs()
 

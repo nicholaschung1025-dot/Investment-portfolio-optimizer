@@ -1056,10 +1056,10 @@ def _print_report(
         print(f"  Mandatory holdings : {holdings or 'none'}")
         print(f"  Chosen             : {', '.join(selection.tickers)}")
         for step in selection.steps:
-            print(
-                f"    step {step['added']:<10} added, "
-                f"portfolio {', '.join(step['portfolio'])}"
-            )
+            added = ", ".join(step["added"]) or "-"
+            removed = ", ".join(step["removed"])
+            change = f"+ {added}" + (f"   - {removed}" if removed else "")
+            print(f"    {change:<26} portfolio {', '.join(step['portfolio'])}")
 
     print("\nPer-asset annualized metrics")
     for ticker in result.expected_returns.index:
