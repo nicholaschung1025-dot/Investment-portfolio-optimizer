@@ -128,7 +128,9 @@ def _add_capital_allocation_line(
     )
 
 
-def _add_risk_distribution(figure: go.Figure, risk: RiskSimulation) -> None:
+def _add_risk_distribution(
+    figure: go.Figure, risk: RiskSimulation, row: int | None = None
+) -> None:
     """Draw the distribution of terminal values with its tail markers."""
     values = np.asarray(risk.terminal_values, dtype=float)
     metrics = risk.metrics
@@ -174,13 +176,14 @@ def _add_risk_distribution(figure: go.Figure, risk: RiskSimulation) -> None:
             hovertemplate="Expected Shortfall: $%{x:,.0f}<extra></extra>",
         )
     )
-    figure.update_yaxes(title_text="Paths", row=2, col=1)
-    figure.update_xaxes(title_text="Terminal value (USD)", row=2, col=1)
-    figure.update_xaxes(tickformat="$,.0f", row=2, col=1)
+    if row is None:
+        return
+    figure.update_yaxes(title_text="Paths", row=row, col=1)
+    figure.update_xaxes(title_text="Terminal value (USD)", row=row, col=1)
+    figure.update_xaxes(tickformat="$,.0f", row=row, col=1)
 
 
-def generate_efficient_frontier(
-    output_path: str | Path,
+def build_frontier_figure(
     cloud: pd.DataFrame,
     max_sharpe: OptimizationResult,
     min_vol: OptimizationResult,
@@ -189,8 +192,8 @@ def generate_efficient_frontier(
     allocation: AllocationResult | None = None,
     risk: RiskSimulation | None = None,
     risk_free_rate: float = 0.04,
-) -> Path:
-    """Render the efficient frontier to a standalone interactive HTML file.
+) -> go.Figure:
+    """Build the efficient frontier figure.
 
     Draws the Monte Carlo portfolio cloud (colored by Sharpe ratio), each asset
     as a labelled point, and the two optimized portfolios as highlighted stars.
@@ -199,7 +202,6 @@ def generate_efficient_frontier(
     distribution of terminal values is added underneath.
 
     Args:
-        output_path: Destination ``.html`` file.
         cloud: Monte Carlo portfolios with ``return``, ``volatility`` and
             ``sharpe`` columns.
         max_sharpe: The maximum-Sharpe portfolio.
@@ -211,11 +213,8 @@ def generate_efficient_frontier(
         risk_free_rate: Annualized risk-free rate, used for the allocation line.
 
     Returns:
-        The path written to.
+        The Plotly figure.
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     if risk is not None:
         figure = make_subplots(
             rows=2,
@@ -236,7 +235,7 @@ def generate_efficient_frontier(
         )
 
     if risk is not None:
-        _add_risk_distribution(figure, risk)
+        _add_risk_distribution(figure, risk, row=2)
         row = 2
 
     figure.update_layout(
@@ -252,6 +251,71 @@ def generate_efficient_frontier(
     else:
         figure.update_xaxes(tickformat=".1%", row=1, col=1)
         figure.update_yaxes(tickformat=".1%", row=1, col=1)
+    return figure
 
+
+def build_risk_figure(risk: RiskSimulation) -> go.Figure:
+    """Build the distribution of terminal values on its own.
+
+    Args:
+        risk: The simulated distribution of terminal values.
+
+    Returns:
+        The Plotly figure.
+    """
+    figure = go.Figure()
+    _add_risk_distribution(figure, risk)
+    figure.update_layout(
+        title="Risk distribution over one year",
+        xaxis_title="Terminal value (USD)",
+        yaxis_title="Paths",
+        template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    figure.update_xaxes(tickformat="$,.0f")
+    return figure
+
+
+def generate_efficient_frontier(
+    output_path: str | Path,
+    cloud: pd.DataFrame,
+    max_sharpe: OptimizationResult,
+    min_vol: OptimizationResult,
+    expected_returns: pd.Series,
+    covariance: pd.DataFrame,
+    allocation: AllocationResult | None = None,
+    risk: RiskSimulation | None = None,
+    risk_free_rate: float = 0.04,
+) -> Path:
+    """Render the efficient frontier to a standalone interactive HTML file.
+
+    Args:
+        output_path: Destination ``.html`` file.
+        cloud: Monte Carlo portfolios with ``return``, ``volatility`` and
+            ``sharpe`` columns.
+        max_sharpe: The maximum-Sharpe portfolio.
+        min_vol: The minimum-volatility portfolio.
+        expected_returns: Annualized expected return per asset.
+        covariance: Annualized covariance matrix.
+        allocation: The cash allocation that reaches a target return.
+        risk: The simulated distribution of terminal values.
+        risk_free_rate: Annualized risk-free rate, used for the allocation line.
+
+    Returns:
+        The path written to.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    figure = build_frontier_figure(
+        cloud,
+        max_sharpe,
+        min_vol,
+        expected_returns,
+        covariance,
+        allocation=allocation,
+        risk=risk,
+        risk_free_rate=risk_free_rate,
+    )
     figure.write_html(str(output_path), include_plotlyjs=True, full_html=True)
     return output_path

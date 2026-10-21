@@ -15,7 +15,7 @@ import pytest
 from src.allocation import AllocationResult
 from src.optimizer import OptimizationResult
 from src.risk import RiskSimulation
-from src.visualizer import generate_efficient_frontier
+from src.visualizer import build_frontier_figure, build_risk_figure, generate_efficient_frontier
 
 
 def _inputs():
@@ -90,6 +90,39 @@ def test_generate_creates_parent_directory(tmp_path) -> None:
     )
 
     assert output_path.exists()
+
+
+def test_build_frontier_figure_returns_a_figure_with_the_expected_traces() -> None:
+    expected_returns, covariance, cloud, max_sharpe, min_vol = _inputs()
+
+    figure = build_frontier_figure(cloud, max_sharpe, min_vol, expected_returns, covariance)
+
+    names = {trace.name for trace in figure.data}
+    assert "Random Portfolios" in names
+    assert "Individual Assets" in names
+    assert "Max Sharpe" in names
+    assert "Min Volatility" in names
+
+
+def test_build_risk_figure_returns_a_figure_with_the_tail_markers() -> None:
+    risk = RiskSimulation(
+        metrics=SimpleNamespace(
+            var_95=10_000.0,
+            cvar_95=15_000.0,
+            prob_profit=0.7,
+            median_value=100_000.0,
+            p05=90_000.0,
+            p95=112_000.0,
+            simulations=500,
+        ),
+        terminal_values=np.linspace(80_000.0, 120_000.0, 500),
+    )
+
+    figure = build_risk_figure(risk)
+
+    names = {trace.name for trace in figure.data}
+    assert "Terminal values" in names
+    assert "Value at Risk (95%)" in names
 
 
 def test_generate_draws_the_capital_allocation_line(tmp_path) -> None:

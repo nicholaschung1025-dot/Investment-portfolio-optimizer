@@ -88,7 +88,7 @@ class AnalysisResult:
         headline: The portfolio matching the requested objective.
         cloud: Monte Carlo portfolio cloud used for the chart.
         db_run_id: ``Run_ID`` of the persisted row.
-        html_path: Path of the generated HTML chart.
+        html_path: Path of the generated HTML chart, when one was written.
         warnings: Combined cleaning warnings.
         expected_return_method: Estimator used for the expected returns.
         covariance_method: Estimator used for the covariance matrix.
@@ -100,6 +100,8 @@ class AnalysisResult:
         selection: The chosen portfolio, when a selection was requested.
         risk: The simulated risk of the portfolio, when a budget was given.
         positions: The tradable positions, when a budget was given.
+        risk_free_rate: Annualized risk-free rate the run used.
+        risk_distribution: Distribution the risk simulation used.
     """
 
     prepared: PreparedPrices
@@ -110,7 +112,7 @@ class AnalysisResult:
     headline: OptimizationResult
     cloud: pd.DataFrame
     db_run_id: int
-    html_path: Path
+    html_path: Path | None
     warnings: list[str] = field(default_factory=list)
     expected_return_method: str = DEFAULT_EXPECTED_RETURN_METHOD
     covariance_method: str = DEFAULT_COVARIANCE_METHOD
@@ -121,6 +123,8 @@ class AnalysisResult:
     selection: SelectionResult | None = None
     risk: RiskSimulation | None = None
     positions: PositionPlan | None = None
+    risk_free_rate: float = 0.04
+    risk_distribution: str = "student_t"
 
 
 def parse_min_weights(values: Sequence[str] | None) -> dict[str, float]:
@@ -271,7 +275,7 @@ def run_analysis(
     objective: Objective,
     risk_free_rate: float,
     db_path: str | Path,
-    output_dir: str | Path,
+    output_dir: str | Path | None,
     downloader: Downloader | None = None,
     n_portfolios: int = 5000,
     seed: int | None = 42,
@@ -316,7 +320,8 @@ def run_analysis(
         objective: ``"max_sharpe"`` or ``"min_vol"``; selects the headline result.
         risk_free_rate: Annualized risk-free rate.
         db_path: Path to the local SQLite file.
-        output_dir: Directory for the generated HTML chart.
+        output_dir: Directory for the generated HTML chart, or ``None`` to skip
+            writing the file.
         downloader: Optional price downloader injected for tests.
         n_portfolios: Number of Monte Carlo portfolios to sample.
         seed: Seed for the Monte Carlo sampler.
@@ -576,17 +581,19 @@ def run_analysis(
         ),
     )
 
-    html_path = generate_efficient_frontier(
-        Path(output_dir) / f"efficient_frontier_{date.today():%Y%m%d}.html",
-        cloud,
-        max_sharpe,
-        min_vol,
-        expected_returns,
-        covariance,
-        allocation=allocation,
-        risk=risk,
-        risk_free_rate=risk_free_rate,
-    )
+    html_path = None
+    if output_dir is not None:
+        html_path = generate_efficient_frontier(
+            Path(output_dir) / f"efficient_frontier_{date.today():%Y%m%d}.html",
+            cloud,
+            max_sharpe,
+            min_vol,
+            expected_returns,
+            covariance,
+            allocation=allocation,
+            risk=risk,
+            risk_free_rate=risk_free_rate,
+        )
 
     validation = None
     if validate:
@@ -678,6 +685,8 @@ def run_analysis(
         selection=selection,
         risk=risk,
         positions=positions,
+        risk_free_rate=risk_free_rate,
+        risk_distribution=risk_distribution,
     )
 
 

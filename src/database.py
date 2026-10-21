@@ -226,9 +226,12 @@ def fetch_runs(db_path: str | Path, limit: int = 20) -> list[dict[str, object]]:
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            "SELECT * FROM runs ORDER BY Run_ID DESC LIMIT ?", (limit,)
-        ).fetchall()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM runs ORDER BY Run_ID DESC LIMIT ?", (limit,)
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
 
     runs: list[dict[str, object]] = []
     for row in rows:
@@ -264,7 +267,12 @@ def fetch_positions(db_path: str | Path, run_id: int) -> list[dict[str, object]]
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            "SELECT * FROM positions WHERE Run_ID = ? ORDER BY Ticker", (run_id,)
-        ).fetchall()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM positions WHERE Run_ID = ? ORDER BY Ticker", (run_id,)
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # A database written before the positions table existed has no
+            # positions to show; the table is created on the next run.
+            return []
     return [dict(row) for row in rows]

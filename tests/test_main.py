@@ -134,6 +134,25 @@ def test_cli_end_to_end_exits_zero(tmp_path, capsys) -> None:
     assert (tmp_path / "outputs").exists()
 
 
+def test_no_output_directory_means_no_chart_file(tmp_path) -> None:
+    result = run_analysis(
+        tickers=["AAA", "BBB", "CCC"],
+        start="2021-01-01",
+        end="2022-06-01",
+        objective="max_sharpe",
+        risk_free_rate=0.04,
+        db_path=tmp_path / "portfolio_history.db",
+        output_dir=None,
+        downloader=_fake_downloader,
+        n_portfolios=200,
+        seed=1,
+        fundamentals_fetcher=_no_fundamentals,
+        fundamentals_cache=tmp_path / "fundamentals.json",
+    )
+
+    assert result.html_path is None
+
+
 def test_parser_defaults_match_the_documented_estimation_flags() -> None:
     args = build_parser().parse_args([])
 

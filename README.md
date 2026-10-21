@@ -17,6 +17,25 @@ self-contained HTML file you open by double-clicking.
 individually and the optimal Max-Sharpe (red star) and Min-Volatility (blue
 star) portfolios highlighted.*
 
+![Streamlit app](docs/streamlit_app.png)
+
+*The same engine as a Streamlit app: the sidebar collects the universe, the
+estimation method, the constraints and the risk settings, and the tabs show
+the portfolio, the tail risk, the tradable positions, the out-of-sample
+validation and the run history.*
+
+## Running it
+
+There are two front ends over the same pipeline. The app is the interactive
+one; the command line is the scriptable one.
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+The app opens on `http://localhost:8501`. It is a standalone project: it
+shares nothing with any other application.
+
 ## Features
 
 - **Deterministic Markowitz optimization** — classical convex optimization via
@@ -96,7 +115,8 @@ star) portfolios highlighted.*
 | Data source | `yfinance` (free, no API key) |
 | Optimization | `scipy.optimize` (SLSQP, analytic gradients) |
 | Covariance | `scikit-learn` (Ledoit-Wolf, OAS shrinkage) |
-| Visualization | `plotly` (self-contained HTML export) |
+| Visualization | `plotly` (self-contained HTML export, and inline in the app) |
+| Interface | `streamlit` (the app), `argparse` (the command line) |
 | Persistence | SQLite (single local `.db` file) |
 | Testing | `pytest` |
 
@@ -108,11 +128,13 @@ mean_variance_optimizer/
 │   └── portfolio_history.db
 ├── outputs/                  # Generated HTML charts (gitignored)
 │   └── efficient_frontier_YYYYMMDD.html
-├── docs/                     # README screenshot
-│   └── efficient_frontier.png
+├── docs/                     # README screenshots
+│   ├── efficient_frontier.png
+│   └── streamlit_app.png
 ├── src/
 │   ├── __init__.py
 │   ├── errors.py             # Shared exception hierarchy
+│   ├── app_helpers.py        # Parsing and tables for the Streamlit app
 │   ├── data_fetcher.py       # Fetch + clean prices, align calendars
 │   ├── math_engine.py        # Log returns, annualized metrics, covariance
 │   ├── covariance.py         # Sample / Ledoit-Wolf / OAS covariance
@@ -133,6 +155,8 @@ mean_variance_optimizer/
 ├── tests/
 │   ├── test_math_engine.py
 │   ├── test_optimizer.py
+│   ├── test_app.py           # The Streamlit app, run through Streamlit's harness
+│   ├── test_app_helpers.py
 │   ├── test_covariance.py
 │   ├── test_expected_returns.py
 │   ├── test_constraints.py
@@ -149,6 +173,7 @@ mean_variance_optimizer/
 │   ├── test_visualizer.py
 │   └── test_main.py
 ├── main.py                   # CLI entry point / pipeline orchestration
+├── app.py                    # Streamlit front end
 ├── requirements.txt
 ├── pytest.ini
 └── README.md
@@ -205,6 +230,12 @@ Check the result out of sample against an equal-weight benchmark:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --validate --validate-rebalance monthly
+```
+
+The same thing through the app, with the results in the browser:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
 Or just run it with no arguments for a sensible default universe:
