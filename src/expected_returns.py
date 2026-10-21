@@ -20,11 +20,15 @@ rate, matching how the Sharpe ratio is computed elsewhere in the package.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 
 from src.errors import OptimizationError
 from src.math_engine import annualized_expected_returns
+
+ExpectedReturnMethod = Literal["historical_mean", "capm"]
 
 
 def historical_mean(
